@@ -1,0 +1,52 @@
+# Dependencies
+node_modules/
+__pycache__/
+*.pyc
+.venv/
+venv/
+env/
+
+# Environment files
+.env
+.env.local
+.env*.local
+
+# Build outputs
+.next/
+out/
+build/
+dist/
+*.egg-info/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# Testing
+.coverage
+htmlcov/
+.pytest_cache/
+
+# iOS
+ios/Realtor360.xcodeproj/xcuserdata/
+ios/Realtor360.xcodeproj/project.xcworkspace/xcuserdata/
+*.xcuserstate
+DerivedData/
+
+# Uploads/Storage (local dev)
+uploads/
+*.jpg
+*.jpeg
+*.png
+!web/public/**/*.png
+!web/public/**/*.jpg
