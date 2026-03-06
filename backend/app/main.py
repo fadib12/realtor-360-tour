@@ -1,54 +1,42 @@
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
+"""
+FastAPI application entry-point.
+"""
+
 from contextlib import asynccontextmanager
 
-from app.config import get_settings
-from app.database import engine, Base
-from app.api import tours, auth, health
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+from .config import get_settings
+from .database import init_db
+from .api.captures import router as captures_router
+from .api.health import router as health_router
+
+settings = get_settings()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: Create tables
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    """Run DB migrations on startup."""
+    await init_db()
     yield
-    # Shutdown
-    await engine.dispose()
 
 
 app = FastAPI(
-    title="Realtor 360 Tour Platform API",
-    description="API for creating and managing 360° virtual tours",
+    title="Realtor 360 API",
     version="1.0.0",
-    lifespan=lifespan
+    lifespan=lifespan,
 )
 
-settings = get_settings()
-
-# CORS middleware
+# CORS — open for development, lock down in production
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        settings.web_base_url,
-        "http://localhost:3000",
-        "http://localhost:3001",
-    ],
+    allow_origins=settings.cors_origins.split(","),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Include routers
-app.include_router(health.router, prefix="/api", tags=["Health"])
-app.include_router(auth.router, prefix="/api/auth", tags=["Authentication"])
-app.include_router(tours.router, prefix="/api/tours", tags=["Tours"])
-
-
-@app.get("/")
-async def root():
-    return {
-        "name": "Realtor 360 Tour Platform API",
-        "version": "1.0.0",
-        "docs": "/docs"
-    }
+# Routes
+app.include_router(health_router)
+app.include_router(captures_router, prefix="/v1")

@@ -7,44 +7,76 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		A1000001 /* Realtor360App.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000011 /* Realtor360App.swift */; };
-		A1000002 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000012 /* ContentView.swift */; };
-		A1000003 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A1000013 /* Assets.xcassets */; };
-		A1000004 /* CaptureStartView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000014 /* CaptureStartView.swift */; };
-		A1000005 /* GuidedCaptureView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000015 /* GuidedCaptureView.swift */; };
-		A1000006 /* UploadingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000016 /* UploadingView.swift */; };
-		A1000007 /* CameraService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000017 /* CameraService.swift */; };
-		A1000008 /* MotionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000018 /* MotionService.swift */; };
-		A1000009 /* GuidedCaptureController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000019 /* GuidedCaptureController.swift */; };
-		A100000A /* UploadService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100001A /* UploadService.swift */; };
-		A100000B /* APIService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100001B /* APIService.swift */; };
-		A100000C /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100001C /* Models.swift */; };
-		A100000D /* CameraPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100001D /* CameraPreviewView.swift */; };
-		A100000E /* TargetDotView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100001E /* TargetDotView.swift */; };
+		F100000000000000000001 /* Realtor360App.swift in Sources */ = {isa = PBXBuildFile; fileRef = F200000000000000000001; };
+		F100000000000000000002 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F200000000000000000002; };
+		F100000000000000000003 /* CaptureSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = F200000000000000000003; };
+		F100000000000000000004 /* CaptureStep.swift in Sources */ = {isa = PBXBuildFile; fileRef = F200000000000000000004; };
+		F100000000000000000005 /* FileHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = F200000000000000000005; };
+		F100000000000000000006 /* HapticManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = F200000000000000000006; };
+		F100000000000000000007 /* QualityChecker.swift in Sources */ = {isa = PBXBuildFile; fileRef = F200000000000000000007; };
+		F100000000000000000008 /* APIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = F200000000000000000008; };
+		F100000000000000000009 /* BackendMode.swift in Sources */ = {isa = PBXBuildFile; fileRef = F200000000000000000009; };
+		F100000000000000000010 /* MockBackend.swift in Sources */ = {isa = PBXBuildFile; fileRef = F200000000000000000010; };
+		F100000000000000000011 /* CameraManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = F200000000000000000011; };
+		F100000000000000000012 /* MotionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = F200000000000000000012; };
+		F100000000000000000013 /* CaptureViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = F200000000000000000013; };
+		F100000000000000000014 /* UploadViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = F200000000000000000014; };
+		F100000000000000000015 /* CaptureTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F200000000000000000015; };
+		F100000000000000000016 /* CaptureHomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F200000000000000000016; };
+		F100000000000000000017 /* GuidedCaptureView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F200000000000000000017; };
+		F100000000000000000018 /* UploadProcessingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F200000000000000000018; };
+		F100000000000000000019 /* CaptureResultView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F200000000000000000019; };
+		F100000000000000000020 /* ExploreView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F200000000000000000020; };
+		F100000000000000000021 /* ProfileView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F200000000000000000021; };
+		F100000000000000000022 /* PanoramaViewer.swift in Sources */ = {isa = PBXBuildFile; fileRef = F200000000000000000022; };
+		F100000000000000000023 /* WorldViewer.swift in Sources */ = {isa = PBXBuildFile; fileRef = F200000000000000000023; };
+		F100000000000000000024 /* PanoramaStitcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = F200000000000000000024; };
+		F100000000000000000025 /* ARTrackingManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = F200000000000000000025; };
+		F100000000000000000026 /* LiveGlobeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F200000000000000000026; };
+		F100000000000000000027 /* HDRCameraManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = F200000000000000000027; };
+		F100000000000000000028 /* MotionTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = F200000000000000000028; };
+		F100000000000000000029 /* HDRProcessor.swift in Sources */ = {isa = PBXBuildFile; fileRef = F200000000000000000029; };
+		F100000000000000000090 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = F200000000000000000090; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
-		A1000010 /* Realtor360.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Realtor360.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		A1000011 /* Realtor360App.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Realtor360App.swift; sourceTree = "<group>"; };
-		A1000012 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
-		A1000013 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
-		A1000014 /* CaptureStartView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureStartView.swift; sourceTree = "<group>"; };
-		A1000015 /* GuidedCaptureView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuidedCaptureView.swift; sourceTree = "<group>"; };
-		A1000016 /* UploadingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UploadingView.swift; sourceTree = "<group>"; };
-		A1000017 /* CameraService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraService.swift; sourceTree = "<group>"; };
-		A1000018 /* MotionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MotionService.swift; sourceTree = "<group>"; };
-		A1000019 /* GuidedCaptureController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuidedCaptureController.swift; sourceTree = "<group>"; };
-		A100001A /* UploadService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UploadService.swift; sourceTree = "<group>"; };
-		A100001B /* APIService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIService.swift; sourceTree = "<group>"; };
-		A100001C /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
-		A100001D /* CameraPreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraPreviewView.swift; sourceTree = "<group>"; };
-		A100001E /* TargetDotView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TargetDotView.swift; sourceTree = "<group>"; };
-		A100001F /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
-		A1000020 /* Realtor360.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Realtor360.entitlements; sourceTree = "<group>"; };
+		F200000000000000000001 /* Realtor360App.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Realtor360App.swift; sourceTree = "<group>"; };
+		F200000000000000000002 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		F200000000000000000003 /* CaptureSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureSession.swift; sourceTree = "<group>"; };
+		F200000000000000000004 /* CaptureStep.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureStep.swift; sourceTree = "<group>"; };
+		F200000000000000000005 /* FileHelper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileHelper.swift; sourceTree = "<group>"; };
+		F200000000000000000006 /* HapticManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HapticManager.swift; sourceTree = "<group>"; };
+		F200000000000000000007 /* QualityChecker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QualityChecker.swift; sourceTree = "<group>"; };
+		F200000000000000000008 /* APIClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIClient.swift; sourceTree = "<group>"; };
+		F200000000000000000009 /* BackendMode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackendMode.swift; sourceTree = "<group>"; };
+		F200000000000000000010 /* MockBackend.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MockBackend.swift; sourceTree = "<group>"; };
+		F200000000000000000011 /* CameraManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraManager.swift; sourceTree = "<group>"; };
+		F200000000000000000012 /* MotionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MotionManager.swift; sourceTree = "<group>"; };
+		F200000000000000000013 /* CaptureViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureViewModel.swift; sourceTree = "<group>"; };
+		F200000000000000000014 /* UploadViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UploadViewModel.swift; sourceTree = "<group>"; };
+		F200000000000000000015 /* CaptureTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureTabView.swift; sourceTree = "<group>"; };
+		F200000000000000000016 /* CaptureHomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureHomeView.swift; sourceTree = "<group>"; };
+		F200000000000000000017 /* GuidedCaptureView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuidedCaptureView.swift; sourceTree = "<group>"; };
+		F200000000000000000018 /* UploadProcessingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UploadProcessingView.swift; sourceTree = "<group>"; };
+		F200000000000000000019 /* CaptureResultView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureResultView.swift; sourceTree = "<group>"; };
+		F200000000000000000020 /* ExploreView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExploreView.swift; sourceTree = "<group>"; };
+		F200000000000000000021 /* ProfileView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileView.swift; sourceTree = "<group>"; };
+		F200000000000000000022 /* PanoramaViewer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PanoramaViewer.swift; sourceTree = "<group>"; };
+		F200000000000000000023 /* WorldViewer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldViewer.swift; sourceTree = "<group>"; };
+		F200000000000000000024 /* PanoramaStitcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PanoramaStitcher.swift; sourceTree = "<group>"; };
+		F200000000000000000025 /* ARTrackingManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ARTrackingManager.swift; sourceTree = "<group>"; };
+		F200000000000000000026 /* LiveGlobeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveGlobeView.swift; sourceTree = "<group>"; };
+		F200000000000000000027 /* HDRCameraManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HDRCameraManager.swift; sourceTree = "<group>"; };
+		F200000000000000000028 /* MotionTracker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MotionTracker.swift; sourceTree = "<group>"; };
+		F200000000000000000029 /* HDRProcessor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HDRProcessor.swift; sourceTree = "<group>"; };
+		F200000000000000000090 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		F200000000000000000091 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		F200000000000000000092 /* Realtor360.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Realtor360.entitlements; sourceTree = "<group>"; };
+		F200000000000000000099 /* Realtor360.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Realtor360.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
-		A100000F /* Frameworks */ = {
+		F300000000000000000001 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -54,79 +86,151 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
-		A1000000 = {
+		F400000000000000000000 /* root */ = {
 			isa = PBXGroup;
 			children = (
-				A1000021 /* Realtor360 */,
-				A1000022 /* Products */,
+				F400000000000000000001 /* Realtor360 */,
+				F400000000000000000099 /* Products */,
 			);
 			sourceTree = "<group>";
 		};
-		A1000021 /* Realtor360 */ = {
+		F400000000000000000099 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				A1000011 /* Realtor360App.swift */,
-				A1000012 /* ContentView.swift */,
-				A1000023 /* Views */,
-				A1000024 /* Services */,
-				A1000025 /* Models */,
-				A1000013 /* Assets.xcassets */,
-				A100001F /* Info.plist */,
-				A1000020 /* Realtor360.entitlements */,
-			);
-			path = Realtor360;
-			sourceTree = "<group>";
-		};
-		A1000022 /* Products */ = {
-			isa = PBXGroup;
-			children = (
-				A1000010 /* Realtor360.app */,
+				F200000000000000000099 /* Realtor360.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
 		};
-		A1000023 /* Views */ = {
+		F400000000000000000001 /* Realtor360 */ = {
 			isa = PBXGroup;
 			children = (
-				A1000014 /* CaptureStartView.swift */,
-				A1000015 /* GuidedCaptureView.swift */,
-				A1000016 /* UploadingView.swift */,
-				A100001D /* CameraPreviewView.swift */,
-				A100001E /* TargetDotView.swift */,
+				F400000000000000000010 /* App */,
+				F400000000000000000020 /* Core */,
+				F400000000000000000040 /* Features */,
+				F400000000000000000070 /* Viewers */,
+				F200000000000000000090 /* Assets.xcassets */,
+				F200000000000000000091 /* Info.plist */,
+				F200000000000000000092 /* Realtor360.entitlements */,
 			);
-			path = Views;
+			path = Realtor360;
 			sourceTree = "<group>";
 		};
-		A1000024 /* Services */ = {
+		F400000000000000000010 /* App */ = {
 			isa = PBXGroup;
 			children = (
-				A1000017 /* CameraService.swift */,
-				A1000018 /* MotionService.swift */,
-				A1000019 /* GuidedCaptureController.swift */,
-				A100001A /* UploadService.swift */,
-				A100001B /* APIService.swift */,
+				F200000000000000000001 /* Realtor360App.swift */,
+				F200000000000000000002 /* ContentView.swift */,
 			);
-			path = Services;
+			path = App;
 			sourceTree = "<group>";
 		};
-		A1000025 /* Models */ = {
+		F400000000000000000020 /* Core */ = {
 			isa = PBXGroup;
 			children = (
-				A100001C /* Models.swift */,
+				F400000000000000000021 /* Models */,
+				F400000000000000000022 /* Helpers */,
+				F400000000000000000023 /* Networking */,
+			);
+			path = Core;
+			sourceTree = "<group>";
+		};
+		F400000000000000000021 /* Models */ = {
+			isa = PBXGroup;
+			children = (
+				F200000000000000000003 /* CaptureSession.swift */,
+				F200000000000000000004 /* CaptureStep.swift */,
 			);
 			path = Models;
+			sourceTree = "<group>";
+		};
+		F400000000000000000022 /* Helpers */ = {
+			isa = PBXGroup;
+			children = (
+				F200000000000000000005 /* FileHelper.swift */,
+				F200000000000000000006 /* HapticManager.swift */,
+				F200000000000000000029 /* HDRProcessor.swift */,
+				F200000000000000000024 /* PanoramaStitcher.swift */,
+				F200000000000000000007 /* QualityChecker.swift */,
+			);
+			path = Helpers;
+			sourceTree = "<group>";
+		};
+		F400000000000000000023 /* Networking */ = {
+			isa = PBXGroup;
+			children = (
+				F200000000000000000008 /* APIClient.swift */,
+				F200000000000000000009 /* BackendMode.swift */,
+				F200000000000000000010 /* MockBackend.swift */,
+			);
+			path = Networking;
+			sourceTree = "<group>";
+		};
+		F400000000000000000040 /* Features */ = {
+			isa = PBXGroup;
+			children = (
+				F400000000000000000041 /* Capture */,
+				F400000000000000000042 /* Explore */,
+				F400000000000000000043 /* Profile */,
+			);
+			path = Features;
+			sourceTree = "<group>";
+		};
+		F400000000000000000041 /* Capture */ = {
+			isa = PBXGroup;
+			children = (
+				F200000000000000000025 /* ARTrackingManager.swift */,
+				F200000000000000000011 /* CameraManager.swift */,
+				F200000000000000000027 /* HDRCameraManager.swift */,
+				F200000000000000000012 /* MotionManager.swift */,
+				F200000000000000000028 /* MotionTracker.swift */,
+				F200000000000000000013 /* CaptureViewModel.swift */,
+				F200000000000000000014 /* UploadViewModel.swift */,
+				F200000000000000000015 /* CaptureTabView.swift */,
+				F200000000000000000016 /* CaptureHomeView.swift */,
+				F200000000000000000017 /* GuidedCaptureView.swift */,
+				F200000000000000000018 /* UploadProcessingView.swift */,
+				F200000000000000000019 /* CaptureResultView.swift */,
+			);
+			path = Capture;
+			sourceTree = "<group>";
+		};
+		F400000000000000000042 /* Explore */ = {
+			isa = PBXGroup;
+			children = (
+				F200000000000000000020 /* ExploreView.swift */,
+			);
+			path = Explore;
+			sourceTree = "<group>";
+		};
+		F400000000000000000043 /* Profile */ = {
+			isa = PBXGroup;
+			children = (
+				F200000000000000000021 /* ProfileView.swift */,
+			);
+			path = Profile;
+			sourceTree = "<group>";
+		};
+		F400000000000000000070 /* Viewers */ = {
+			isa = PBXGroup;
+			children = (
+				F200000000000000000026 /* LiveGlobeView.swift */,
+				F200000000000000000022 /* PanoramaViewer.swift */,
+				F200000000000000000023 /* WorldViewer.swift */,
+			);
+			path = Viewers;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		A100000E /* Realtor360 */ = {
+		F500000000000000000001 /* Realtor360 */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = A1000026 /* Build configuration list for PBXNativeTarget "Realtor360" */;
+			buildConfigurationList = F600000000000000000002 /* Build configuration list for PBXNativeTarget "Realtor360" */;
 			buildPhases = (
-				A100000D /* Sources */,
-				A100000F /* Frameworks */,
-				A1000030 /* Resources */,
+				F700000000000000000001 /* Sources */,
+				F300000000000000000001 /* Frameworks */,
+				F800000000000000000001 /* Resources */,
 			);
 			buildRules = (
 			);
@@ -134,25 +238,25 @@
 			);
 			name = Realtor360;
 			productName = Realtor360;
-			productReference = A1000010 /* Realtor360.app */;
+			productReference = F200000000000000000099 /* Realtor360.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
-		A1000001 /* Project object */ = {
+		F900000000000000000001 /* Project object */ = {
 			isa = PBXProject;
 			attributes = {
 				BuildIndependentTargetsInParallel = 1;
 				LastSwiftUpdateCheck = 1500;
 				LastUpgradeCheck = 1500;
 				TargetAttributes = {
-					A100000E = {
+					F500000000000000000001 = {
 						CreatedOnToolsVersion = 15.0;
 					};
 				};
 			};
-			buildConfigurationList = A1000027 /* Build configuration list for PBXProject "Realtor360" */;
+			buildConfigurationList = F600000000000000000001 /* Build configuration list for PBXProject "Realtor360" */;
 			compatibilityVersion = "Xcode 14.0";
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
@@ -160,90 +264,93 @@
 				en,
 				Base,
 			);
-			mainGroup = A1000000;
-			productRefGroup = A1000022 /* Products */;
+			mainGroup = F400000000000000000000;
+			productRefGroup = F400000000000000000099 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				A100000E /* Realtor360 */,
+				F500000000000000000001 /* Realtor360 */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
-		A1000030 /* Resources */ = {
+		F800000000000000000001 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				A1000003 /* Assets.xcassets in Resources */,
+				F100000000000000000090 /* Assets.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
-		A100000D /* Sources */ = {
+		F700000000000000000001 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				A1000001 /* Realtor360App.swift in Sources */,
-				A1000002 /* ContentView.swift in Sources */,
-				A1000004 /* CaptureStartView.swift in Sources */,
-				A1000005 /* GuidedCaptureView.swift in Sources */,
-				A1000006 /* UploadingView.swift in Sources */,
-				A1000007 /* CameraService.swift in Sources */,
-				A1000008 /* MotionService.swift in Sources */,
-				A1000009 /* GuidedCaptureController.swift in Sources */,
-				A100000A /* UploadService.swift in Sources */,
-				A100000B /* APIService.swift in Sources */,
-				A100000C /* Models.swift in Sources */,
-				A100000D /* CameraPreviewView.swift in Sources */,
-				A100000E /* TargetDotView.swift in Sources */,
+				F100000000000000000001 /* Realtor360App.swift in Sources */,
+				F100000000000000000002 /* ContentView.swift in Sources */,
+				F100000000000000000003 /* CaptureSession.swift in Sources */,
+				F100000000000000000004 /* CaptureStep.swift in Sources */,
+				F100000000000000000005 /* FileHelper.swift in Sources */,
+				F100000000000000000006 /* HapticManager.swift in Sources */,
+				F100000000000000000007 /* QualityChecker.swift in Sources */,
+				F100000000000000000008 /* APIClient.swift in Sources */,
+				F100000000000000000009 /* BackendMode.swift in Sources */,
+				F100000000000000000010 /* MockBackend.swift in Sources */,
+				F100000000000000000011 /* CameraManager.swift in Sources */,
+				F100000000000000000012 /* MotionManager.swift in Sources */,
+				F100000000000000000013 /* CaptureViewModel.swift in Sources */,
+				F100000000000000000014 /* UploadViewModel.swift in Sources */,
+				F100000000000000000015 /* CaptureTabView.swift in Sources */,
+				F100000000000000000016 /* CaptureHomeView.swift in Sources */,
+				F100000000000000000017 /* GuidedCaptureView.swift in Sources */,
+				F100000000000000000018 /* UploadProcessingView.swift in Sources */,
+				F100000000000000000019 /* CaptureResultView.swift in Sources */,
+				F100000000000000000020 /* ExploreView.swift in Sources */,
+				F100000000000000000021 /* ProfileView.swift in Sources */,
+				F100000000000000000022 /* PanoramaViewer.swift in Sources */,
+				F100000000000000000023 /* WorldViewer.swift in Sources */,
+				F100000000000000000024 /* PanoramaStitcher.swift in Sources */,
+				F100000000000000000025 /* ARTrackingManager.swift in Sources */,
+				F100000000000000000026 /* LiveGlobeView.swift in Sources */,
+				F100000000000000000027 /* HDRCameraManager.swift in Sources */,
+				F100000000000000000028 /* MotionTracker.swift in Sources */,
+				F100000000000000000029 /* HDRProcessor.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin XCBuildConfiguration section */
-		A1000028 /* Debug */ = {
+		FA00000000000000000001 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
 				CLANG_ANALYZER_NONNULL = YES;
-				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
 				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
 				CLANG_ENABLE_MODULES = YES;
 				CLANG_ENABLE_OBJC_ARC = YES;
-				CLANG_ENABLE_OBJC_WEAK = YES;
 				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
 				CLANG_WARN_BOOL_CONVERSION = YES;
 				CLANG_WARN_COMMA = YES;
 				CLANG_WARN_CONSTANT_CONVERSION = YES;
-				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
 				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
 				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
 				CLANG_WARN_EMPTY_BODY = YES;
 				CLANG_WARN_ENUM_CONVERSION = YES;
-				CLANG_WARN_INFINITE_RECURSION = YES;
 				CLANG_WARN_INT_CONVERSION = YES;
-				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
-				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
-				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
 				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
 				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
-				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
-				CLANG_WARN_STRICT_PROTOTYPES = YES;
-				CLANG_WARN_SUSPICIOUS_MOVE = YES;
-				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_COMPLETE;
 				CLANG_WARN_UNREACHABLE_CODE = YES;
-				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
-				ENABLE_USER_SCRIPT_SANDBOXING = YES;
-				GCC_C_LANGUAGE_STANDARD = gnu17;
 				GCC_DYNAMIC_NO_PIC = NO;
 				GCC_NO_COMMON_BLOCKS = YES;
 				GCC_OPTIMIZATION_LEVEL = 0;
@@ -253,12 +360,10 @@
 				);
 				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
 				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
-				GCC_WARN_UNDECLARED_SELECTOR = YES;
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
-				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
@@ -268,55 +373,39 @@
 			};
 			name = Debug;
 		};
-		A1000029 /* Release */ = {
+		FA00000000000000000002 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
 				CLANG_ANALYZER_NONNULL = YES;
-				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
 				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
 				CLANG_ENABLE_MODULES = YES;
 				CLANG_ENABLE_OBJC_ARC = YES;
-				CLANG_ENABLE_OBJC_WEAK = YES;
 				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
 				CLANG_WARN_BOOL_CONVERSION = YES;
 				CLANG_WARN_COMMA = YES;
 				CLANG_WARN_CONSTANT_CONVERSION = YES;
-				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
 				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
 				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
 				CLANG_WARN_EMPTY_BODY = YES;
 				CLANG_WARN_ENUM_CONVERSION = YES;
-				CLANG_WARN_INFINITE_RECURSION = YES;
 				CLANG_WARN_INT_CONVERSION = YES;
-				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
-				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
-				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
 				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
 				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
-				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
-				CLANG_WARN_STRICT_PROTOTYPES = YES;
-				CLANG_WARN_SUSPICIOUS_MOVE = YES;
-				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_COMPLETE;
 				CLANG_WARN_UNREACHABLE_CODE = YES;
-				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
-				ENABLE_USER_SCRIPT_SANDBOXING = YES;
-				GCC_C_LANGUAGE_STANDARD = gnu17;
 				GCC_NO_COMMON_BLOCKS = YES;
 				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
 				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
-				GCC_WARN_UNDECLARED_SELECTOR = YES;
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
-				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
-				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				SDKROOT = iphoneos;
 				SWIFT_COMPILATION_MODE = wholemodule;
@@ -324,7 +413,7 @@
 			};
 			name = Release;
 		};
-		A100002A /* Debug */ = {
+		FA00000000000000000003 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
@@ -332,18 +421,15 @@
 				CODE_SIGN_ENTITLEMENTS = Realtor360/Realtor360.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = E84D5MP95F;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Realtor360/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "Realtor 360";
-				INFOPLIST_KEY_NSCameraUsageDescription = "We need camera access to capture 360° photos for your virtual tour.";
-				INFOPLIST_KEY_NSMotionUsageDescription = "We need motion sensor access to guide you through the 360° capture process.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
-				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -359,7 +445,7 @@
 			};
 			name = Debug;
 		};
-		A100002B /* Release */ = {
+		FA00000000000000000004 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
@@ -367,18 +453,15 @@
 				CODE_SIGN_ENTITLEMENTS = Realtor360/Realtor360.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = E84D5MP95F;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Realtor360/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "Realtor 360";
-				INFOPLIST_KEY_NSCameraUsageDescription = "We need camera access to capture 360° photos for your virtual tour.";
-				INFOPLIST_KEY_NSMotionUsageDescription = "We need motion sensor access to guide you through the 360° capture process.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
-				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -397,25 +480,25 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		A1000026 /* Build configuration list for PBXNativeTarget "Realtor360" */ = {
+		F600000000000000000001 /* Build configuration list for PBXProject "Realtor360" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				A100002A /* Debug */,
-				A100002B /* Release */,
+				FA00000000000000000001 /* Debug */,
+				FA00000000000000000002 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		A1000027 /* Build configuration list for PBXProject "Realtor360" */ = {
+		F600000000000000000002 /* Build configuration list for PBXNativeTarget "Realtor360" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				A1000028 /* Debug */,
-				A1000029 /* Release */,
+				FA00000000000000000003 /* Debug */,
+				FA00000000000000000004 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
 	};
-	rootObject = A1000001 /* Project object */;
+	rootObject = F900000000000000000001 /* Project object */;
 }

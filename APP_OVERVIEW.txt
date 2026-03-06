@@ -1,0 +1,182 @@
+REALTOR 360° TOUR — FULL SYSTEM OVERVIEW
+=========================================
+
+WHAT IT IS
+----------
+A production system for real estate 360° virtual tours. An iOS app guides
+realtors through capturing 16 overlapping photos, which a backend stitches
+into an equirectangular panorama and sends to World Labs for navigable 3D
+world generation.
+
+Components:
+  • Native iOS app (SwiftUI)
+  • FastAPI backend (Python)
+  • Celery worker (OpenCV stitching + World Labs API)
+  • PostgreSQL + Redis + MinIO (via Docker Compose)
+
+
+HOW IT WORKS (USER FLOW)
+-------------------------
+
+The app has 3 tabs: Explore | Capture | Profile
+
+STEP 1 — CAPTURE HOME
+  • Type a name for the capture
+  • "Begin capture" for guided 16-photo flow
+  • "Import 360° photo" for existing equirectangular images
+
+STEP 2 — GUIDED CAPTURE
+  • Full-screen camera with rectangular frame overlay
+  • 4 large green guide dots on frame edges (top/bottom/left/right)
+  • CoreMotion tracks rotation; guidance label shows direction
+  • Quality check per photo (blur/brightness)
+  • Progress bar fills: "3 of 16"
+  • Auto-completes after 16 shots (22.5° apart)
+
+STEP 3 — UPLOAD & PROCESSING
+  • Photos uploaded to backend via presigned S3 URLs
+  • Backend stitches panorama with OpenCV
+  • Backend sends panorama to World Labs for 3D world generation
+  • Polls until World Labs completes
+  • iOS polls GET /status for progress
+
+STEP 4 — RESULT SCREEN
+  • Panoramic preview at top
+  • "Unlock your photo" card
+  • "3D World" card — tap to open WKWebView with World Labs viewer
+  • Preview → 360° panorama viewer (SceneKit sphere)
+  • Share / Download / Publish to Google Street View (PRO)
+
+
+TECH STACK
+----------
+iOS App:
+  • Swift 5.9+, SwiftUI, MVVM, iOS 17.0+
+  • AVFoundation (camera), CoreMotion (gyroscope)
+  • CoreImage (quality checks), SceneKit (panorama viewer)
+  • WebKit (World Labs 3D viewer)
+  • Zero external dependencies
+
+Backend:
+  • FastAPI + Uvicorn (API server)
+  • PostgreSQL + SQLAlchemy (database)
+  • Redis + Celery (task queue)
+  • MinIO / S3 (object storage)
+  • OpenCV (panorama stitching)
+  • World Labs Marble API (3D world generation)
+
+
+FILE STRUCTURE — iOS (23 Swift files)
+--------------------------------------
+
+App/
+  Realtor360App.swift        — @main entry point, creates SessionStore
+  ContentView.swift          — TabView with 3 tabs
+
+Core/Models/
+  CaptureSession.swift       — Session model + SessionStore + World Labs fields
+  CaptureStep.swift          — 16-step capture target definitions
+
+Core/Helpers/
+  FileHelper.swift           — Save/load JPEG files to Documents
+  HapticManager.swift        — Taptic feedback
+  QualityChecker.swift       — CIImage blur + brightness analysis
+
+Core/Networking/
+  APIClient.swift            — Protocol, DTOs, RealAPIClient
+  BackendMode.swift          — AppConfig (switch between .mock and .live)
+  MockBackend.swift          — Offline mock that simulates the full pipeline
+
+Features/Capture/
+  CameraManager.swift        — AVCaptureSession setup, async photo capture
+  MotionManager.swift        — CMMotionManager yaw/pitch tracking
+  CaptureViewModel.swift     — 16-step capture logic, quality checks
+  UploadViewModel.swift      — Upload + poll status + map World Labs fields
+  CaptureTabView.swift       — Flow coordinator: Home → Camera → Upload → Result
+  CaptureHomeView.swift      — Name field, Begin capture, Import 360°
+  GuidedCaptureView.swift    — Camera + frame + green dots + capture button
+  UploadProcessingView.swift — Upload/processing progress UI
+  CaptureResultView.swift    — Hero image, cards, action rows
+
+Features/Explore/
+  ExploreView.swift          — List of completed captures
+
+Features/Profile/
+  ProfileView.swift          — Placeholder sign-in screen
+
+Viewers/
+  PanoramaViewer.swift       — SceneKit 360° sphere with pan/pinch
+  WorldViewer.swift          — WKWebView for World Labs navigable 3D worlds
+
+
+FILE STRUCTURE — Backend
+-------------------------
+
+backend/
+  Dockerfile                 — API server container
+  Dockerfile.worker          — Celery worker container
+  requirements.txt           — Python dependencies
+  .env.example               — Environment variable template
+  app/
+    main.py                  — FastAPI app entry point
+    config.py                — Settings from env vars
+    database.py              — Async SQLAlchemy engine + sessions
+    models.py                — Capture model + to_status_dict()
+    api/
+      captures.py            — POST/GET capture endpoints
+      health.py              — Health check
+    services/
+      storage.py             — S3/MinIO presigned URLs + upload/download
+      queue.py               — Celery app + task dispatch
+    worker/
+      run.py                 — Main processing task (stitch → World Labs)
+      stitch.py              — OpenCV panorama stitching
+      worldlabs.py           — World Labs Marble API client
+
+
+API ENDPOINTS
+--------------
+POST /v1/captures
+  → Creates capture record, returns presigned S3 upload URLs
+  Body: { name, captureType, photoCount }
+  Response: { id, uploadUrls[], panoramaUploadUrl, pollUrl }
+
+PUT {presigned_url}
+  → Direct upload of JPEG to S3
+
+POST /v1/captures/{id}/process
+  → Enqueues Celery worker task
+  Response: { status: "processing" }
+
+GET /v1/captures/{id}/status
+  → Returns current processing status
+  Response: {
+    status, progress, previewUrl, panoramaUrl,
+    worldUrl, thumbnailUrl,
+    splats: { "100k", "500k", "full_res" },
+    colliderMeshUrl, generatedAt
+  }
+
+
+CONNECTING TO BACKEND
+----------------------
+1. Start services: docker-compose up -d
+2. Open ios/Realtor360/Core/Networking/BackendMode.swift
+3. Change: static let backend: BackendMode = .live("http://YOUR_IP:8000")
+4. Build and run the iOS app
+
+
+RUNNING LOCALLY
+----------------
+# Start all services:
+docker-compose up -d
+
+# Check API health:
+curl http://localhost:8000/health
+
+# View MinIO console:
+open http://localhost:9001  (minioadmin / minioadmin)
+
+# To enable World Labs 3D generation:
+export WORLDLABS_API_KEY=your-key-here
+docker-compose up -d

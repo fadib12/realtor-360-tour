@@ -1,13 +1,12 @@
-from fastapi import APIRouter
-from datetime import datetime
+"""
+Health check endpoint.
+"""
 
-router = APIRouter()
+from fastapi import APIRouter
+
+router = APIRouter(tags=["health"])
 
 
 @router.get("/health")
-async def health_check():
-    return {
-        "status": "healthy",
-        "timestamp": datetime.utcnow().isoformat(),
-        "service": "realtor360-api"
-    }
+async def health():
+    return {"status": "ok"}

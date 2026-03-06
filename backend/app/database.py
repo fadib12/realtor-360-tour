@@ -1,34 +1,41 @@
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
+"""
+Async SQLAlchemy engine + session factory.
+"""
+
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
-from app.config import get_settings
+
+from .config import get_settings
 
 settings = get_settings()
 
-# Convert postgresql:// to postgresql+asyncpg://
-database_url = settings.database_url
-if database_url.startswith("postgresql://"):
-    database_url = database_url.replace("postgresql://", "postgresql+asyncpg://", 1)
-
 engine = create_async_engine(
-    database_url,
-    echo=False,
+    settings.database_url,
+    echo=settings.debug,
     pool_pre_ping=True,
+    pool_size=10,
+    max_overflow=20,
 )
 
-async_session_maker = async_sessionmaker(
-    engine,
-    class_=AsyncSession,
-    expire_on_commit=False
-)
+async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 
 class Base(DeclarativeBase):
     pass
 
 
-async def get_db():
-    async with async_session_maker() as session:
+async def get_db() -> AsyncSession:  # type: ignore[misc]
+    """FastAPI dependency — yields a session, commits on success, rolls back on error."""
+    async with async_session() as session:
         try:
             yield session
-        finally:
-            await session.close()
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
+
+
+async def init_db() -> None:
+    """Create all tables (called once on startup)."""
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)

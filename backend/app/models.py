@@ -1,95 +1,70 @@
-from sqlalchemy import Column, String, DateTime, Enum, Text, ForeignKey, JSON
-from sqlalchemy.orm import relationship
-from sqlalchemy.sql import func
+"""
+SQLAlchemy models for the Realtor 360 backend.
+"""
+
 from datetime import datetime
-import enum
-import uuid
+from uuid import uuid4
 
-from app.database import Base
+from sqlalchemy import Column, DateTime, Float, Integer, JSON, String, func
 
-
-class TourStatus(str, enum.Enum):
-    WAITING = "WAITING"          # Waiting for capture
-    UPLOADING = "UPLOADING"      # Photos being uploaded
-    PROCESSING = "PROCESSING"    # Stitching in progress
-    READY = "READY"              # Pano ready for viewing
-    FAILED = "FAILED"            # Stitching failed
+from .database import Base
 
 
-def generate_uuid():
-    return str(uuid.uuid4())
+class Capture(Base):
+    __tablename__ = "captures"
 
+    id = Column(String, primary_key=True, default=lambda: str(uuid4()))
+    name = Column(String, nullable=False)
+    capture_type = Column(String, nullable=False)  # "multiPhoto16" | "panorama360"
+    photo_count = Column(Integer, default=0)
+    status = Column(String, default="pending")
+    # status flow: pending → uploading → stitching → generating_world → complete | failed
+    progress = Column(Float, default=0.0)
+    error_message = Column(String, nullable=True)
 
-def generate_slug():
-    return uuid.uuid4().hex[:8]
+    # S3 object keys
+    photo_keys = Column(JSON, default=list)     # ["captures/{id}/001.jpg", ...]
+    panorama_key = Column(String, nullable=True)  # "captures/{id}/panorama.jpg"
+    preview_key = Column(String, nullable=True)   # "captures/{id}/preview.jpg"
 
+    # Public URLs (set after stitching / World Labs)
+    panorama_url = Column(String, nullable=True)
+    preview_url = Column(String, nullable=True)
 
-class User(Base):
-    __tablename__ = "users"
-    
-    id = Column(String(36), primary_key=True, default=generate_uuid)
-    email = Column(String(255), unique=True, nullable=False, index=True)
-    hashed_password = Column(String(255), nullable=False)
-    name = Column(String(255), nullable=True)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
-    
-    tours = relationship("Tour", back_populates="user")
+    # World Labs fields
+    world_operation_id = Column(String, nullable=True)
+    world_id = Column(String, nullable=True)
+    world_url = Column(String, nullable=True)
+    thumbnail_url = Column(String, nullable=True)
+    splats_100k_url = Column(String, nullable=True)
+    splats_500k_url = Column(String, nullable=True)
+    splats_full_url = Column(String, nullable=True)
+    collider_mesh_url = Column(String, nullable=True)
 
-
-class Tour(Base):
-    __tablename__ = "tours"
-    
-    id = Column(String(36), primary_key=True, default=generate_uuid)
-    user_id = Column(String(36), ForeignKey("users.id"), nullable=False)
-    
-    # Tour info
-    name = Column(String(255), nullable=False)
-    address = Column(String(500), nullable=True)
-    notes = Column(Text, nullable=True)
-    
-    # Status
-    status = Column(Enum(TourStatus), default=TourStatus.WAITING, nullable=False)
-    
-    # Public access
-    public_slug = Column(String(16), unique=True, default=generate_slug, index=True)
-    
-    # Stitching result
-    pano_url = Column(String(1000), nullable=True)
-    pano_key = Column(String(500), nullable=True)
-    
-    # Frame metadata (stored after upload)
-    frames_meta = Column(JSON, nullable=True)
-    
-    # Error info (if failed)
-    error_message = Column(Text, nullable=True)
-    
     # Timestamps
     created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     completed_at = Column(DateTime(timezone=True), nullable=True)
-    
-    user = relationship("User", back_populates="tours")
-    frames = relationship("TourFrame", back_populates="tour", cascade="all, delete-orphan")
 
-
-class TourFrame(Base):
-    __tablename__ = "tour_frames"
-    
-    id = Column(String(36), primary_key=True, default=generate_uuid)
-    tour_id = Column(String(36), ForeignKey("tours.id"), nullable=False)
-    
-    # Frame info
-    frame_index = Column(String(10), nullable=False)  # 0-15
-    frame_key = Column(String(500), nullable=False)   # S3 key
-    
-    # Capture metadata
-    yaw = Column(String(20), nullable=True)
-    pitch = Column(String(20), nullable=True)
-    
-    # Upload status
-    uploaded = Column(String(10), default="false")
-    
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    
-    tour = relationship("Tour", back_populates="frames")
+    def to_status_dict(self) -> dict:
+        """Return the status response dict for the iOS client."""
+        result: dict = {
+            "status": self.status,
+            "progress": self.progress,
+            "errorMessage": self.error_message,
+            "previewUrl": self.preview_url,
+            "panoramaUrl": self.panorama_url,
+            "worldUrl": self.world_url,
+            "thumbnailUrl": self.thumbnail_url,
+            "colliderMeshUrl": self.collider_mesh_url,
+            "generatedAt": self.completed_at.isoformat() if self.completed_at else None,
+        }
+        # Only include splats if at least one URL exists
+        if any([self.splats_100k_url, self.splats_500k_url, self.splats_full_url]):
+            result["splats"] = {
+                "100k": self.splats_100k_url,
+                "500k": self.splats_500k_url,
+                "full_res": self.splats_full_url,
+            }
+        else:
+            result["splats"] = None
+        return result
