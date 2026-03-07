@@ -3,6 +3,7 @@ import CoreGraphics
 import ImageIO
 import UniformTypeIdentifiers
 import Accelerate
+import simd
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Professional On-Device Panorama Stitcher — Maximum Power.
@@ -28,6 +29,180 @@ import Accelerate
 // No OpenCV dependency — pure CoreGraphics / Accelerate / ImageIO.
 // ─────────────────────────────────────────────────────────────────────────────
 
+// MARK: - Stitch Preparation Pipeline
+
+/// Validates a completed capture session and produces ordered, typed input
+/// for the spherical panorama stitcher.
+///
+/// Pipeline:
+///   1. Validate all 16 image files exist on disk
+///   2. Sort shots by target order (matching the spherical grid layout)
+///   3. Pair each image with its actual capture pose (yaw, pitch, roll, transform)
+///   4. Bundle session-level camera FOV derived from ARKit intrinsics
+///   5. Return a `StitchPlan` ready for `PanoramaStitcher.stitch(plan:)`
+enum StitchPreparation {
+
+    /// Per-shot input for the stitcher: image data + full pose.
+    struct StitchShot {
+        let order: Int
+        let targetID: Int
+        let imageData: Data
+        let imagePath: URL
+        let yawDeg: Double
+        let pitchDeg: Double
+        let rollDeg: Double
+        let cameraTransform: [Double]
+    }
+
+    /// Complete, validated stitcher input for one session.
+    struct StitchPlan {
+        let sessionId: String
+        let hfovDeg: Double
+        let vfovDeg: Double
+        let shots: [StitchShot]
+        let totalExpected: Int
+        let missingTargetIDs: [Int]
+
+        var isComplete: Bool { missingTargetIDs.isEmpty }
+    }
+
+    enum PrepError: LocalizedError {
+        case manifestEmpty
+        case missingImages([Int])
+
+        var errorDescription: String? {
+            switch self {
+            case .manifestEmpty:
+                return "Manifest contains no shots"
+            case .missingImages(let ids):
+                return "Missing images for target IDs: \(ids)"
+            }
+        }
+    }
+
+    // MARK: - Build from manifest (disk-backed)
+
+    /// Load images from disk using the manifest as the source of truth.
+    /// Returns a validated `StitchPlan` sorted by capture order.
+    static func prepare(
+        manifest: CaptureManifest,
+        sessionId: String
+    ) -> StitchPlan {
+        let sessionDir = FileHelper.sessionDirectory(for: sessionId)
+
+        var shots: [StitchShot] = []
+        var missing: [Int] = []
+
+        for shot in manifest.shots.sorted(by: { $0.order < $1.order }) {
+            let imageURL = sessionDir.appendingPathComponent(shot.imageFile)
+            guard let imageData = try? Data(contentsOf: imageURL) else {
+                missing.append(shot.targetID)
+                continue
+            }
+
+            shots.append(StitchShot(
+                order: shot.order,
+                targetID: shot.targetID,
+                imageData: imageData,
+                imagePath: imageURL,
+                yawDeg: shot.actualYawDeg,
+                pitchDeg: shot.actualPitchDeg,
+                rollDeg: shot.actualRollDeg,
+                cameraTransform: shot.cameraTransform
+            ))
+        }
+
+        return StitchPlan(
+            sessionId: sessionId,
+            hfovDeg: manifest.cameraHFOVDeg,
+            vfovDeg: manifest.cameraVFOVDeg,
+            shots: shots,
+            totalExpected: manifest.totalShots,
+            missingTargetIDs: missing
+        )
+    }
+
+    // MARK: - Build from in-memory capture state (live path)
+
+    /// Build a StitchPlan directly from the in-memory captured images and
+    /// metadata without requiring a manifest file on disk. Used at the end
+    /// of a live capture session before the manifest is even written.
+    static func prepare(
+        sessionId: String,
+        capturedImages: [Int: Data],
+        capturedPositions: [Int: (yawDeg: Double, pitchDeg: Double)],
+        photoMetadata: [SphereCapturePhotoMetadata],
+        orderedTargetIDs: [Int],
+        hfovDeg: Double,
+        vfovDeg: Double
+    ) -> StitchPlan {
+        let sessionDir = FileHelper.sessionDirectory(for: sessionId)
+        let metaByTarget: [Int: SphereCapturePhotoMetadata] = Dictionary(
+            uniqueKeysWithValues: photoMetadata.compactMap { m in
+                (m.targetID, m)
+            }
+        )
+
+        var shots: [StitchShot] = []
+        var missing: [Int] = []
+
+        for (order, targetID) in orderedTargetIDs.enumerated() {
+            guard let imageData = capturedImages[targetID] else {
+                missing.append(targetID)
+                continue
+            }
+
+            let meta = metaByTarget[targetID]
+            let yaw: Double
+            let pitch: Double
+            let roll: Double
+            let transform: [Double]
+
+            if let m = meta {
+                yaw = m.actualYaw
+                pitch = m.actualPitch
+                roll = m.actualRoll
+                transform = m.cameraTransform
+            } else if let pos = capturedPositions[targetID] {
+                yaw = pos.yawDeg
+                pitch = pos.pitchDeg
+                roll = 0
+                transform = SphereCapturePhotoMetadata.flatTransform(matrix_identity_float4x4)
+            } else {
+                yaw = SphereGrid.targets[targetID].yawDeg
+                pitch = SphereGrid.targets[targetID].pitchDeg
+                roll = 0
+                transform = SphereCapturePhotoMetadata.flatTransform(matrix_identity_float4x4)
+            }
+
+            let imageFile = String(format: "step_%02d.jpg", targetID + 1)
+            let imagePath = sessionDir.appendingPathComponent(imageFile)
+
+            shots.append(StitchShot(
+                order: order,
+                targetID: targetID,
+                imageData: imageData,
+                imagePath: imagePath,
+                yawDeg: yaw,
+                pitchDeg: pitch,
+                rollDeg: roll,
+                cameraTransform: transform
+            ))
+        }
+
+        return StitchPlan(
+            sessionId: sessionId,
+            hfovDeg: hfovDeg,
+            vfovDeg: vfovDeg,
+            shots: shots,
+            totalExpected: orderedTargetIDs.count,
+            missingTargetIDs: missing
+        )
+    }
+}
+
+// MARK: - Panorama Stitcher
+
 enum PanoramaStitcher {
 
     // MARK: - Output dimensions (adaptive for device capability)
@@ -40,34 +215,51 @@ enum PanoramaStitcher {
     static var outW: Int { useHighRes ? 8192 : 4096 }
     static var outH: Int { useHighRes ? 4096 : 2048 }
 
-    // MARK: - Camera FOV (portrait mode, wide-angle lens)
+    // MARK: - Camera FOV (portrait mode, ultra-wide lens)
 
-    /// Horizontal FOV in portrait mode (degrees). iPhone Wide ~70° landscape → ~55° portrait.
-    private static let cameraHFOV: Double = 55.0
-    /// Vertical FOV in portrait mode (degrees). iPhone Wide ~70° landscape → ~70° portrait.
-    private static let cameraVFOV: Double = 70.0
+    /// Horizontal FOV in portrait mode — ultra-wide ARKit capture.
+    /// Sensor is landscape 4:3; after .right orientation the narrow dimension
+    /// becomes portrait width. Measured from ARKit intrinsics: fx ≈ 1022 for
+    /// a 1920×1440 buffer → HFOV = 2·atan(720/1022) ≈ 70°.
+    private static let cameraHFOV: Double = 70.0
+    /// Vertical FOV in portrait mode — tall dimension gets the wider sensor angle.
+    /// VFOV = 2·atan(960/1022) ≈ 87°.
+    private static let cameraVFOV: Double = 87.0
 
     // MARK: - Public API: Stitch JPEG images (LDR path)
 
     /// Composite `images` into an equirectangular panorama JPEG.
     /// Returns the JPEG `Data` on success, `nil` on failure.
-    static func stitch(images: [Data], sessionId: String) -> Data? {
+    static func stitch(
+        images: [Data],
+        sessionId: String,
+        actualPositions: [(yawDeg: Double, pitchDeg: Double)]? = nil
+    ) -> Data? {
         guard !images.isEmpty else { return nil }
 
         let w = outW
         let h = outH
-        let positions = SphereGrid.targets
+        let gridPositions = SphereGrid.targets
 
         // Allocate float32 RGBA canvas (W × H × 4 channels)
         var canvas = [Float](repeating: 0, count: w * h * 4)
         var weights = [Float](repeating: 0, count: w * h)
 
         for (i, imgData) in images.enumerated() {
-            guard i < positions.count,
+            guard i < gridPositions.count,
                   let uiImage = UIImage(data: imgData),
                   let cgImg = uiImage.cgImage else { continue }
 
-            let pos = positions[i]
+            let yaw: Double
+            let pitch: Double
+            if let actual = actualPositions, i < actual.count {
+                yaw = actual[i].yawDeg
+                pitch = actual[i].pitchDeg
+            } else {
+                yaw = gridPositions[i].yawDeg
+                pitch = gridPositions[i].pitchDeg
+            }
+
             let photoPixels = extractRGBAFloat(from: cgImg)
             guard let pixels = photoPixels else { continue }
 
@@ -75,8 +267,8 @@ enum PanoramaStitcher {
                 photoPixels: pixels,
                 photoWidth: cgImg.width,
                 photoHeight: cgImg.height,
-                yawDeg: pos.yawDeg,
-                elevationDeg: pos.pitchDeg,
+                yawDeg: yaw,
+                elevationDeg: pitch,
                 hfovDeg: cameraHFOV,
                 vfovDeg: cameraVFOV,
                 outW: w, outH: h,
@@ -98,6 +290,462 @@ enum PanoramaStitcher {
         guard let jpegData = canvasToJPEG(canvas, outW: w, outH: h, quality: 0.90) else { return nil }
         FileHelper.savePanorama(jpegData, sessionId: sessionId)
         return jpegData
+    }
+
+    // MARK: - Public API: Stitch from StitchPlan (full pipeline)
+
+    /// Full stitching pipeline:
+    ///   1. Decode images + compute exposure statistics
+    ///   2. Compute per-image gain for exposure compensation
+    ///   3. Build full 3×3 rotation matrices (yaw + pitch + roll)
+    ///   4. Refine poses via pairwise overlap correlation
+    ///   5. Warp each image to equirectangular with distance-to-edge blending
+    ///   6. Normalise, encode, save
+    static func stitch(plan: StitchPreparation.StitchPlan) -> Data? {
+        guard !plan.shots.isEmpty else { return nil }
+
+        let w = outW
+        let h = outH
+        let hfov = plan.hfovDeg
+        let vfov = plan.vfovDeg
+        let shotCount = plan.shots.count
+
+        if !plan.isComplete {
+            print("⚠️ Stitching \(shotCount)/\(plan.totalExpected) shots")
+        }
+
+        // ── 1. Decode all images ─────────────────────────────────────────
+        var decoded: [DecodedShot] = []
+        for shot in plan.shots {
+            guard let uiImage = UIImage(data: shot.imageData),
+                  let cgImg = uiImage.cgImage,
+                  let pixels = extractRGBAFloat(from: cgImg) else { continue }
+
+            let pw = cgImg.width
+            let ph = cgImg.height
+            let mean = centerMeanIntensity(pixels, width: pw, height: ph)
+
+            decoded.append(DecodedShot(
+                pixels: pixels, width: pw, height: ph,
+                yawDeg: shot.yawDeg, pitchDeg: shot.pitchDeg, rollDeg: shot.rollDeg,
+                meanIntensity: mean
+            ))
+        }
+        guard !decoded.isEmpty else { return nil }
+
+        // ── 2. Exposure compensation (global gain per image) ─────────────
+        let globalMean = decoded.reduce(Float(0)) { $0 + $1.meanIntensity }
+            / Float(decoded.count)
+        let gains: [Float] = decoded.map { shot in
+            shot.meanIntensity > 0.02 ? globalMean / shot.meanIntensity : 1.0
+        }
+
+        // ── 3. Build inverse rotation matrices (world → camera-local) ────
+        var rotations: [InvRotation3] = decoded.map {
+            InvRotation3(yawDeg: $0.yawDeg, pitchDeg: $0.pitchDeg, rollDeg: $0.rollDeg)
+        }
+
+        // ── 4. Refine poses via pairwise overlap correlation ─────────────
+        let corrections = refinePoses(
+            decoded: decoded, rotations: rotations,
+            hfovDeg: hfov, vfovDeg: vfov
+        )
+        for i in rotations.indices {
+            let c = corrections[i]
+            if abs(c.dyaw) > 1e-6 || abs(c.dpitch) > 1e-6 {
+                let d = decoded[i]
+                rotations[i] = InvRotation3(
+                    yawDeg: d.yawDeg + c.dyaw,
+                    pitchDeg: d.pitchDeg + c.dpitch,
+                    rollDeg: d.rollDeg
+                )
+            }
+        }
+
+        // ── 5. Warp + blend to equirectangular canvas ────────────────────
+        var canvas = [Float](repeating: 0, count: w * h * 4)
+        var weights = [Float](repeating: 0, count: w * h)
+
+        for (i, shot) in decoded.enumerated() {
+            warpFull(
+                photoPixels: shot.pixels,
+                photoWidth: shot.width,
+                photoHeight: shot.height,
+                rotation: rotations[i],
+                hfovDeg: hfov, vfovDeg: vfov,
+                gain: gains[i],
+                outW: w, outH: h,
+                canvas: &canvas,
+                weights: &weights
+            )
+        }
+
+        // ── 6. Normalise ─────────────────────────────────────────────────
+        normaliseCanvas(&canvas, weights: weights, outW: w, outH: h)
+
+        let coverage = coverageRatio(weights: weights, pixelCount: w * h)
+        if coverage < 0.85 {
+            print("⚠️ Panorama coverage: \(Int(coverage * 100))%")
+        }
+
+        // ── 7. Encode + save ─────────────────────────────────────────────
+        guard let jpegData = canvasToJPEG(canvas, outW: w, outH: h, quality: 0.92) else {
+            return nil
+        }
+        FileHelper.savePanorama(jpegData, sessionId: plan.sessionId)
+        return jpegData
+    }
+
+    // MARK: - Decoded Shot
+
+    private struct DecodedShot {
+        let pixels: [Float]
+        let width: Int
+        let height: Int
+        let yawDeg: Double
+        let pitchDeg: Double
+        let rollDeg: Double
+        let meanIntensity: Float
+    }
+
+    // MARK: - 3×3 Inverse Rotation Matrix (world → camera-local)
+
+    /// Precomputed R_inv = Rz(-roll) · Rx(-pitch) · Ry(-yaw).
+    /// Transforms a world-space unit direction into camera-local coordinates
+    /// where +X = right, +Y = up, −Z = forward.
+    private struct InvRotation3 {
+        let r00: Double, r01: Double, r02: Double
+        let r10: Double, r11: Double, r12: Double
+        let r20: Double, r21: Double, r22: Double
+
+        init(yawDeg: Double, pitchDeg: Double, rollDeg: Double) {
+            let y = yawDeg * .pi / 180.0
+            let p = -pitchDeg * .pi / 180.0   // negate: +pitchDeg = look up
+            let rl = rollDeg * .pi / 180.0
+
+            let cy = cos(y); let sy = sin(y)
+            let cp = cos(p); let sp = sin(p)
+            let cr = cos(rl); let sr = sin(rl)
+
+            // R = Ry(yaw) · Rx(pitch) · Rz(roll)
+            // R_inv = R^T (orthonormal)
+            r00 = cy * cr + sy * sp * sr
+            r01 = cp * sr
+            r02 = -sy * cr + cy * sp * sr
+            r10 = -cy * sr + sy * sp * cr
+            r11 = cp * cr
+            r12 = sy * sr + cy * sp * cr
+            r20 = sy * cp
+            r21 = -sp
+            r22 = cy * cp
+        }
+
+        @inline(__always)
+        func apply(_ wx: Double, _ wy: Double, _ wz: Double) -> (Double, Double, Double) {
+            (r00 * wx + r01 * wy + r02 * wz,
+             r10 * wx + r11 * wy + r12 * wz,
+             r20 * wx + r21 * wy + r22 * wz)
+        }
+    }
+
+    // MARK: - Exposure: Center-Region Mean Intensity
+
+    private static func centerMeanIntensity(
+        _ pixels: [Float], width: Int, height: Int
+    ) -> Float {
+        let margin = 0.2
+        let x0 = Int(Double(width) * margin)
+        let x1 = Int(Double(width) * (1.0 - margin))
+        let y0 = Int(Double(height) * margin)
+        let y1 = Int(Double(height) * (1.0 - margin))
+
+        var sum: Float = 0
+        var count: Int = 0
+        let stride = max(1, (x1 - x0) * (y1 - y0) / 4000)
+        var idx = 0
+        for row in y0..<y1 {
+            for col in x0..<x1 {
+                idx += 1
+                guard idx % stride == 0 else { continue }
+                let base = (row * width + col) * 4
+                guard base + 2 < pixels.count else { continue }
+                let lum = 0.299 * pixels[base] + 0.587 * pixels[base + 1]
+                    + 0.114 * pixels[base + 2]
+                sum += lum
+                count += 1
+            }
+        }
+        return count > 0 ? sum / Float(count) : 0.3
+    }
+
+    // MARK: - Pose Refinement via Overlap Correlation
+
+    /// For each pair of images whose centres are within HFOV of each other,
+    /// sample a sparse grid in the overlap zone and find the sub-degree
+    /// yaw/pitch shift that minimises photometric error.
+    private static func refinePoses(
+        decoded: [DecodedShot],
+        rotations: [InvRotation3],
+        hfovDeg: Double,
+        vfovDeg: Double
+    ) -> [(dyaw: Double, dpitch: Double)] {
+        let n = decoded.count
+        var accum = [(dyaw: Double, dpitch: Double)](repeating: (0, 0), count: n)
+        var pairCount = [Int](repeating: 0, count: n)
+
+        let overlapThresholdDeg = max(hfovDeg, vfovDeg) * 0.7
+
+        for i in 0..<n {
+            for j in (i + 1)..<n {
+                let angDist = angularDistance(
+                    y0: decoded[i].yawDeg, p0: decoded[i].pitchDeg,
+                    y1: decoded[j].yawDeg, p1: decoded[j].pitchDeg
+                )
+                guard angDist < overlapThresholdDeg else { continue }
+
+                let (dy, dp) = estimatePairCorrection(
+                    a: decoded[i], rotA: rotations[i],
+                    b: decoded[j], rotB: rotations[j],
+                    hfovDeg: hfovDeg, vfovDeg: vfovDeg
+                )
+
+                accum[i].dyaw += dy * 0.5
+                accum[i].dpitch += dp * 0.5
+                accum[j].dyaw -= dy * 0.5
+                accum[j].dpitch -= dp * 0.5
+                pairCount[i] += 1
+                pairCount[j] += 1
+            }
+        }
+
+        return (0..<n).map { i in
+            let pc = max(pairCount[i], 1)
+            return (dyaw: accum[i].dyaw / Double(pc),
+                    dpitch: accum[i].dpitch / Double(pc))
+        }
+    }
+
+    private static func angularDistance(
+        y0: Double, p0: Double, y1: Double, p1: Double
+    ) -> Double {
+        let toRad = Double.pi / 180.0
+        let d0 = simd_double3(cos(p0 * toRad) * sin(y0 * toRad),
+                              sin(p0 * toRad),
+                              cos(p0 * toRad) * cos(y0 * toRad))
+        let d1 = simd_double3(cos(p1 * toRad) * sin(y1 * toRad),
+                              sin(p1 * toRad),
+                              cos(p1 * toRad) * cos(y1 * toRad))
+        let dot = min(1.0, max(-1.0, simd_dot(d0, d1)))
+        return acos(dot) * 180.0 / .pi
+    }
+
+    /// Sample a grid of world directions in the overlap zone and find
+    /// the small yaw/pitch offset that minimises mean colour difference.
+    private static func estimatePairCorrection(
+        a: DecodedShot, rotA: InvRotation3,
+        b: DecodedShot, rotB: InvRotation3,
+        hfovDeg: Double, vfovDeg: Double
+    ) -> (dyaw: Double, dpitch: Double) {
+        let midYaw = (a.yawDeg + b.yawDeg) / 2.0
+        let midPitch = (a.pitchDeg + b.pitchDeg) / 2.0
+        let sampleRange = min(hfovDeg, vfovDeg) * 0.25
+        let gridN = 6
+        let hfov = hfovDeg * .pi / 180.0
+        let vfov = vfovDeg * .pi / 180.0
+        let fxA = Double(a.width) / (2.0 * tan(hfov / 2.0))
+        let fyA = Double(a.height) / (2.0 * tan(vfov / 2.0))
+        let fxB = Double(b.width) / (2.0 * tan(hfov / 2.0))
+        let fyB = Double(b.height) / (2.0 * tan(vfov / 2.0))
+
+        struct Sample {
+            let wx: Double; let wy: Double; let wz: Double
+        }
+
+        var samples: [Sample] = []
+        for gi in 0...gridN {
+            for gj in 0...gridN {
+                let sy = midYaw + sampleRange * (Double(gi) / Double(gridN) - 0.5) * 2.0
+                let sp = midPitch + sampleRange * (Double(gj) / Double(gridN) - 0.5) * 2.0
+                let yr = sy * .pi / 180.0
+                let pr = sp * .pi / 180.0
+                samples.append(Sample(
+                    wx: cos(pr) * sin(yr),
+                    wy: sin(pr),
+                    wz: cos(pr) * cos(yr)
+                ))
+            }
+        }
+
+        let searchSteps: [Double] = [-0.4, -0.2, 0.0, 0.2, 0.4]
+        var bestDy = 0.0, bestDp = 0.0, bestErr = Double.greatestFiniteMagnitude
+
+        for dyDeg in searchSteps {
+            for dpDeg in searchSteps {
+                let testRot = InvRotation3(
+                    yawDeg: b.yawDeg + dyDeg,
+                    pitchDeg: b.pitchDeg + dpDeg,
+                    rollDeg: b.rollDeg
+                )
+                var err: Double = 0
+                var matched = 0
+
+                for s in samples {
+                    let (lxA, lyA, lzA) = rotA.apply(s.wx, s.wy, s.wz)
+                    guard lzA > 0.05 else { continue }
+                    let pxA = fxA * (lxA / lzA) + Double(a.width) / 2.0
+                    let pyA = Double(a.height) / 2.0 - fyA * (lyA / lzA)
+                    guard pxA >= 2, pxA < Double(a.width) - 2,
+                          pyA >= 2, pyA < Double(a.height) - 2 else { continue }
+
+                    let (lxB, lyB, lzB) = testRot.apply(s.wx, s.wy, s.wz)
+                    guard lzB > 0.05 else { continue }
+                    let pxB = fxB * (lxB / lzB) + Double(b.width) / 2.0
+                    let pyB = Double(b.height) / 2.0 - fyB * (lyB / lzB)
+                    guard pxB >= 2, pxB < Double(b.width) - 2,
+                          pyB >= 2, pyB < Double(b.height) - 2 else { continue }
+
+                    let (rA, gA, bA) = bicubicSample(
+                        a.pixels, width: a.width, height: a.height,
+                        x: Float(pxA), y: Float(pyA)
+                    )
+                    let (rB, gB, bB) = bicubicSample(
+                        b.pixels, width: b.width, height: b.height,
+                        x: Float(pxB), y: Float(pyB)
+                    )
+                    let dr = Double(rA - rB), dg = Double(gA - gB), db = Double(bA - bB)
+                    err += dr * dr + dg * dg + db * db
+                    matched += 1
+                }
+
+                if matched > 4 {
+                    let meanErr = err / Double(matched)
+                    if meanErr < bestErr {
+                        bestErr = meanErr
+                        bestDy = dyDeg
+                        bestDp = dpDeg
+                    }
+                }
+            }
+        }
+
+        return (dyaw: bestDy, dpitch: bestDp)
+    }
+
+    // MARK: - Full-Rotation Spherical Warp
+
+    /// Projects a photo onto the equirectangular canvas using:
+    ///   • Full 3×3 rotation matrix (yaw + pitch + roll)
+    ///   • Distance-to-edge blending weight (smooth seams)
+    ///   • Per-image gain for exposure compensation
+    ///   • Bicubic interpolation
+    private static func warpFull(
+        photoPixels: [Float],
+        photoWidth: Int,
+        photoHeight: Int,
+        rotation: InvRotation3,
+        hfovDeg: Double,
+        vfovDeg: Double,
+        gain: Float,
+        outW: Int,
+        outH: Int,
+        canvas: inout [Float],
+        weights: inout [Float]
+    ) {
+        let hfov = hfovDeg * .pi / 180.0
+        let vfov = vfovDeg * .pi / 180.0
+
+        let fx = Double(photoWidth) / (2.0 * tan(hfov / 2.0))
+        let fy = Double(photoHeight) / (2.0 * tan(vfov / 2.0))
+        let cx = Double(photoWidth) / 2.0
+        let cy = Double(photoHeight) / 2.0
+
+        let maxAngle = max(hfov, vfov) * 0.6 + 0.15
+
+        // Camera forward in local space is (0, 0, 1) (lz > 0 = visible).
+        // R (camera-local → world) = R_inv^T, so forward in world = row 2 of R_inv.
+        var centreYawRad = atan2(rotation.r20, rotation.r22)
+        if centreYawRad < 0 { centreYawRad += 2.0 * .pi }
+        let centrePitch = asin(min(1, max(-1, rotation.r21)))
+        let centreYawDeg = centreYawRad * 180.0 / .pi
+        let centrePitchDeg = centrePitch * 180.0 / .pi
+
+        let halfAngleDeg = maxAngle * 180.0 / .pi
+
+        let uMinRaw = Int(((centreYawDeg - halfAngleDeg) / 360.0) * Double(outW)) - 2
+        let uMaxRaw = Int(((centreYawDeg + halfAngleDeg) / 360.0) * Double(outW)) + 2
+        let vMin = max(0, Int(((90.0 - centrePitchDeg - halfAngleDeg) / 180.0)
+            * Double(outH)) - 2)
+        let vMax = min(outH - 1, Int(((90.0 - centrePitchDeg + halfAngleDeg) / 180.0)
+            * Double(outH)) + 2)
+
+        var ranges: [(Int, Int)] = []
+        if uMinRaw < 0 {
+            ranges.append((0, min(uMaxRaw, outW - 1)))
+            ranges.append((max(outW + uMinRaw, 0), outW - 1))
+        } else if uMaxRaw >= outW {
+            ranges.append((uMinRaw, outW - 1))
+            ranges.append((0, min(uMaxRaw - outW, outW - 1)))
+        } else {
+            ranges.append((max(uMinRaw, 0), min(uMaxRaw, outW - 1)))
+        }
+
+        let edgeMargin = 2.0
+        let photoWd = Double(photoWidth)
+        let photoHd = Double(photoHeight)
+
+        for range in ranges {
+            guard range.0 <= range.1 else { continue }
+            for v in vMin...vMax {
+                let phi = (.pi / 2.0) - (Double(v) + 0.5) / Double(outH) * .pi
+
+                for u in range.0...range.1 {
+                    let lambda = (Double(u) + 0.5) / Double(outW) * 2.0 * .pi
+
+                    let worldX = cos(phi) * sin(lambda)
+                    let worldY = sin(phi)
+                    let worldZ = cos(phi) * cos(lambda)
+
+                    let (lx, ly, lz) = rotation.apply(worldX, worldY, worldZ)
+                    guard lz > 0.01 else { continue }
+
+                    let px = fx * (lx / lz) + cx
+                    let py = cy - fy * (ly / lz)
+
+                    guard px >= 1.5, px < photoWd - 1.5,
+                          py >= 1.5, py < photoHd - 1.5 else { continue }
+
+                    let (r, g, b) = bicubicSample(
+                        photoPixels, width: photoWidth, height: photoHeight,
+                        x: Float(px), y: Float(py)
+                    )
+
+                    // Distance-to-edge weight: ramps 0 at edges → 1 at centre
+                    let distToEdge = min(
+                        px - edgeMargin,
+                        photoWd - edgeMargin - px,
+                        py - edgeMargin,
+                        photoHd - edgeMargin - py
+                    )
+                    let maxDist = min(cx, cy) - edgeMargin
+                    let edgeW = Float(max(0, min(1, distToEdge / maxDist)))
+
+                    // Angular weight: cos² falloff from photo centre
+                    let cosAngle = Float(lz) / Float(sqrt(lx * lx + ly * ly + lz * lz))
+                    let angularW = cosAngle * cosAngle
+
+                    let weight = edgeW * angularW
+                    guard weight > 1e-5 else { continue }
+
+                    let idx = v * outW + u
+                    let cIdx = idx * 4
+                    canvas[cIdx + 0] += weight * gain * r
+                    canvas[cIdx + 1] += weight * gain * g
+                    canvas[cIdx + 2] += weight * gain * b
+                    canvas[cIdx + 3] = 1.0
+                    weights[idx] += weight
+                }
+            }
+        }
     }
 
     // MARK: - Public API: Stitch HDR brackets → 32-bit EXR

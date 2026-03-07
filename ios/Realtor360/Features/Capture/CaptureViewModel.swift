@@ -2,114 +2,67 @@ import SwiftUI
 import ARKit
 import UIKit
 import simd
-
-// ─────────────────────────────────────────────────────────────────────────────
-// 360° PANORAMA CAPTURE — 16-SHOT METHOD (MAXIMUM POWER)
-//
-// 16 capture directions covering a full sphere:
-//   8 Horizon  (pitch =  0°, yaw = 0°, 45°, 90°, 135°, 180°, 225°, 270°, 315°)
-//   4 Upper    (pitch = +35°, yaw = 0°, 90°, 180°, 270°)
-//   4 Lower    (pitch = −35°, yaw = 0°, 90°, 180°, 270°)
-//
-// Camera: iPhone Wide (~70° HFOV, ~55° VFOV) → 30-45% overlap.
-//
-// Alignment detection:
-//   dot(cameraForward, targetDirection) > cos(10°) ≈ 0.9848
-//   Lock time: 0.25 s  |  Cooldown: 0.5 s
-//
-// Enhanced capture gates:
-//   • ARKit tracking quality must be .normal
-//   • Angular velocity must be < 15°/s (phone nearly still)
-//   • Consecutive stable frames required before auto-capture
-//   • HDR bracket failure is warned (not silently eaten)
-//   • Retry counter per target for quality rejections
-//
-// Target direction (ARKit world space, −Z = initial forward):
-//   x = cos(pitch) × sin(yaw)
-//   y = sin(pitch)
-//   z = −cos(pitch) × cos(yaw)
-//
-// Capture pipeline:
-//   ARKit tracking → stability gate → alignment → HDR bracket
-//   → quality check → preview + float → live globe → stitch → EXR
-// ─────────────────────────────────────────────────────────────────────────────
+import ImageIO
 
 // MARK: - SphereGrid (16 targets, 8 + 4 + 4)
 
-/// 16-target spherical capture grid per specification.
-/// Shared by CaptureViewModel, PanoramaStitcher, and UploadViewModel.
 enum SphereGrid {
     struct Target {
-        let yawDeg: Double          // horizontal rotation 0°–360°
-        let pitchDeg: Double        // vertical: +up / −down (0° = horizon)
-        let direction: simd_float3  // unit vector in ARKit world space
+        let yawDeg: Double
+        let pitchDeg: Double
+        let direction: simd_float3
     }
 
-    /// Unit direction vector from (yaw, pitch) in degrees.
-    ///
-    /// ARKit world: +Y = up, initial camera forward = −Z.
-    ///   x =  cos(pitch) × sin(yaw)
-    ///   y =  sin(pitch)
-    ///   z = −cos(pitch) × cos(yaw)
     static func unitVector(yawDeg: Double, pitchDeg: Double) -> simd_float3 {
-        let y = yawDeg   * .pi / 180.0
-        let p = pitchDeg * .pi / 180.0
-        return simd_float3(
-            Float( cos(p) * sin(y)),
-            Float( sin(p)),
-            Float(-cos(p) * cos(y))
-        )
+        let yaw = yawDeg * .pi / 180.0
+        let pitch = pitchDeg * .pi / 180.0
+
+        let x = cos(pitch) * sin(yaw)
+        let y = sin(pitch)
+        let z = cos(pitch) * cos(yaw)
+
+        return simd_normalize(simd_float3(Float(x), Float(y), Float(z)))
     }
 
-    static let targets: [Target] = {
-        var t: [Target] = []
+    static let targets: [Target] = [
+        Target(yawDeg: 0, pitchDeg: 0, direction: unitVector(yawDeg: 0, pitchDeg: 0)),
+        Target(yawDeg: 45, pitchDeg: 0, direction: unitVector(yawDeg: 45, pitchDeg: 0)),
+        Target(yawDeg: 90, pitchDeg: 0, direction: unitVector(yawDeg: 90, pitchDeg: 0)),
+        Target(yawDeg: 135, pitchDeg: 0, direction: unitVector(yawDeg: 135, pitchDeg: 0)),
+        Target(yawDeg: 180, pitchDeg: 0, direction: unitVector(yawDeg: 180, pitchDeg: 0)),
+        Target(yawDeg: 225, pitchDeg: 0, direction: unitVector(yawDeg: 225, pitchDeg: 0)),
+        Target(yawDeg: 270, pitchDeg: 0, direction: unitVector(yawDeg: 270, pitchDeg: 0)),
+        Target(yawDeg: 315, pitchDeg: 0, direction: unitVector(yawDeg: 315, pitchDeg: 0)),
 
-        // Band 0: 8 Horizon shots — pitch = 0°, yaw = 0° to 315° (45° step)
-        for i in 0..<8 {
-            let yaw = Double(i) * 45.0
-            t.append(Target(yawDeg: yaw, pitchDeg: 0,
-                            direction: unitVector(yawDeg: yaw, pitchDeg: 0)))
-        }
-        // Band 1: 4 Upper shots — pitch = +35°, yaw = 0°, 90°, 180°, 270°
-        for i in 0..<4 {
-            let yaw = Double(i) * 90.0
-            t.append(Target(yawDeg: yaw, pitchDeg: 35,
-                            direction: unitVector(yawDeg: yaw, pitchDeg: 35)))
-        }
-        // Band 2: 4 Lower shots — pitch = −35°, yaw = 0°, 90°, 180°, 270°
-        for i in 0..<4 {
-            let yaw = Double(i) * 90.0
-            t.append(Target(yawDeg: yaw, pitchDeg: -35,
-                            direction: unitVector(yawDeg: yaw, pitchDeg: -35)))
-        }
+        Target(yawDeg: 45, pitchDeg: 45, direction: unitVector(yawDeg: 45, pitchDeg: 45)),
+        Target(yawDeg: 135, pitchDeg: 45, direction: unitVector(yawDeg: 135, pitchDeg: 45)),
+        Target(yawDeg: 225, pitchDeg: 45, direction: unitVector(yawDeg: 225, pitchDeg: 45)),
+        Target(yawDeg: 315, pitchDeg: 45, direction: unitVector(yawDeg: 315, pitchDeg: 45)),
 
-        return t
-    }()
+        Target(yawDeg: 45, pitchDeg: -45, direction: unitVector(yawDeg: 45, pitchDeg: -45)),
+        Target(yawDeg: 135, pitchDeg: -45, direction: unitVector(yawDeg: 135, pitchDeg: -45)),
+        Target(yawDeg: 225, pitchDeg: -45, direction: unitVector(yawDeg: 225, pitchDeg: -45)),
+        Target(yawDeg: 315, pitchDeg: -45, direction: unitVector(yawDeg: 315, pitchDeg: -45))
+    ]
 
-    static var count: Int { targets.count }  // 16
+    static var count: Int { targets.count }
 }
 
-// MARK: - CaptureTarget (mutable per-dot state)
+// MARK: - Capture UI Phase State Machine
 
-struct CaptureTarget: Identifiable {
-    let id: Int
-    let yawDeg: Double
-    let pitchDeg: Double
-    let direction: simd_float3
-    var isCaptured: Bool = false
-    var retryCount: Int = 0  // track quality rejections
-}
+enum CapturePhase: Equatable {
+    case initialLock
+    case firstCaptureCommitted
+    case guidedContinuation
+    case stitching
+    case completed
 
-struct GuideDot: Identifiable {
-    let id: Int
-    let screenPoint: CGPoint
-    let isActive: Bool
-    let isCaptured: Bool
-}
-
-struct GuidePointer {
-    let screenPoint: CGPoint
-    let angleDeg: Double
+    var isCapturing: Bool {
+        switch self {
+        case .initialLock, .firstCaptureCommitted, .guidedContinuation: return true
+        case .stitching, .completed: return false
+        }
+    }
 }
 
 // MARK: - CaptureViewModel
@@ -117,642 +70,585 @@ struct GuidePointer {
 @MainActor
 class CaptureViewModel: ObservableObject {
 
-    // ── Spec constants ──────────────────────────────────────────────────────
-    /// Slightly wider cone for practical hand-held capture.
-    static let alignmentThreshold: Float = cos(14.0 * .pi / 180.0)
-    /// Seconds the user must hold alignment before auto-capture fires.
-    static let holdDuration: Double = 0.35
-    /// Seconds to wait after a capture before allowing the next.
-    static let cooldownDuration: Double = 0.2
-    /// Maximum quality retries before accepting a lower-quality capture.
-    static let maxRetries: Int = 3
-    /// Require stable motion before hold starts.
-    static let requiredStableFrames: Int = 1
-    /// Max angular velocity during alignment/hold.
-    static let maxAngularVelocityDegPerSec: Double = 25.0
-    static let firstShotEyeLevelToleranceDeg: Double = 10.0
-    static let maxPositionDriftMeters: Float = 0.22
-    static let captureSequence: [Int] = [0, 2, 8, 6, 12, 1, 3, 4, 5, 7, 9, 10, 11, 13, 14, 15]
-    static let firstRingIDs: Set<Int> = [2, 8, 6, 12]
-    static let projectedGuideSpread: CGFloat = 1.10
-    static let instantCaptureMode: Bool = true
+    let nrPhotos: Int = SphereGrid.count
+    let globe = GlobeSceneController()
+    let arManager = ARTrackingManager()
+    let mosaicRenderer = PreviewMosaicRenderer()
 
-    let nrPhotos: Int = SphereGrid.count  // 16
+    private let sphereCapture = SphereCaptureManager()
 
-    // ── Published: targets ──────────────────────────────────────────────────
-    @Published var captureTargets: [CaptureTarget] = []
     @Published var capturedThumbnails: [Int: UIImage] = [:]
+    @Published private(set) var firstCaptureThumbnail: UIImage? = nil
     @Published var nrPhotosTaken: Int = 0
     @Published var isComplete = false
-    @Published private(set) var currentSequenceIndex: Int = 0
     @Published private(set) var positionDriftMeters: Float = 0
+    @Published var phase: CapturePhase = .initialLock
+    @Published var stitchedPanorama: UIImage? = nil
 
-    // ── Published: alignment + hold ─────────────────────────────────────────
     @Published var alignedDotId: Int? = nil
     @Published var isWaitingToCapture = false
     @Published var holdProgress: Double = 0
     @Published var takingPicture = false
     @Published var qualityWarning: String? = nil
 
-    // ── Published: tracking ────────────────────────────────────────────────
     @Published var trackingQuality: ARTrackingManager.TrackingQuality = .notAvailable
 
-    // ── ARKit tracking ──────────────────────────────────────────────────────
-    let arManager = ARTrackingManager()
+    // Required scanner outputs
+    @Published private(set) var currentTargetIndex: Int = 0
+    @Published private(set) var totalTargets: Int = SphereGrid.count
+    @Published private(set) var progress: Double = 0
+    @Published private(set) var currentTargetYaw: Double = 0
+    @Published private(set) var currentTargetPitch: Double = 0
+    @Published private(set) var liveYaw: Double = 0
+    @Published private(set) var livePitch: Double = 0
+    @Published private(set) var yawError: Double = 0
+    @Published private(set) var pitchError: Double = 0
+    @Published private(set) var angleErrorDeg: Double = 180
+    @Published private(set) var translationErrorMeters: Double = 0
+    @Published private(set) var targetScreenPoint: CGPoint = .zero
+    @Published private(set) var isPositionValid: Bool = false
+    @Published private(set) var isAngleValid: Bool = false
+    @Published private(set) var isScreenAligned: Bool = false
+    @Published private(set) var canCapture: Bool = false
+    @Published private(set) var trackingState: ARTrackingManager.TrackingQuality = .notAvailable
+    @Published private(set) var scannerState: SphereCaptureManager.ScannerState = .idle
+    @Published private(set) var targetVisited: [Bool] = Array(repeating: false, count: SphereGrid.count)
+    @Published private(set) var visitedTargets: [Int] = []
+    @Published private(set) var remainingTargets: [Int] = Array(0..<SphereGrid.count)
+    @Published private(set) var coverageFraction: Double = 0
+    @Published private(set) var warningUserMoved: Bool = false
+    @Published private(set) var warningTrackingLimited: Bool = false
+    @Published private(set) var scanCompleted: Bool = false
 
-    /// HDR mode: true = 3-exposure bracket, false = single JPEG.
-    @Published var hdrEnabled = false
-
-    // ── Live Globe ──────────────────────────────────────────────────────────
-    let globe = GlobeSceneController()
-
-    // ── Capture data ────────────────────────────────────────────────────────
     var sessionId = UUID().uuidString
     private var capturedImages: [Int: Data] = [:]
-    private var capturedHDR: [Int: HDRBracketResult] = [:]
+    private var capturedActualPositions: [Int: (yawDeg: Double, pitchDeg: Double)] = [:]
+    private var lastGuideViewportSize: CGSize = .zero
 
-    /// Ordered JPEG previews for upload.
     var capturedImageData: [Data] {
         (0..<nrPhotos).compactMap { capturedImages[$0] }
     }
-    /// Ordered HDR float buffers for EXR stitching.
-    var capturedHDRData: [HDRBracketResult] {
-        (0..<nrPhotos).compactMap { capturedHDR[$0] }
+
+    /// The angular size (in degrees) that the targeting square subtends on the
+    /// 120° globe. Photos are warped at this FOV so they exactly fill the square.
+    var displayWarpFOV: (hDeg: Double, vDeg: Double) {
+        let screenH = Double(lastGuideViewportSize.height)
+        let screenW = Double(lastGuideViewportSize.width)
+        guard screenH > 100, screenW > 100 else { return (50, 65) }
+
+        let globeVFOV = 120.0 * .pi / 180.0
+        let aspect = screenW / screenH
+        let globeHFOV = 2.0 * atan(aspect * tan(globeVFOV / 2.0))
+
+        let windowW = screenW * 0.78
+        let windowH = min(windowW / 0.75, screenH * 0.55)
+        let adjustedW = windowH * 0.75
+
+        let vFraction = windowH / screenH
+        let hFraction = adjustedW / screenW
+        let vAngle = 2.0 * atan(vFraction * tan(globeVFOV / 2.0)) * 180.0 / .pi
+        let hAngle = 2.0 * atan(hFraction * tan(globeHFOV / 2.0)) * 180.0 / .pi
+
+        return (hAngle, vAngle)
     }
 
-    // ── Hold tracking ───────────────────────────────────────────────────────
-    private var holdStartTime: Date?
-    private var lastCaptureTime: Date?
-    private var stableFrameCount: Int = 0
-    private var captureRequestPending = false
-    private var firstShotArmed = false
-    private var initialForwardDirection: simd_float3?
-    private var captureOriginPosition: simd_float3?
-    private var captureReferenceYawDeg: Double?
+    var capturedHDRData: [HDRBracketResult] { [] }
 
-    // MARK: - Lifecycle
+    var activeGuideTargetID: Int? {
+        sphereCapture.activeTargetID
+    }
 
-    init() { buildTargets() }
+    var isFirstShot: Bool {
+        nrPhotosTaken == 0
+    }
+
+    var directionHint: String? {
+        if trackingQuality == .notAvailable {
+            return "Waiting for camera…"
+        }
+        if case .limited(let reason) = trackingQuality, reason == "Initializing" {
+            return "Initializing tracking — move slowly"
+        }
+        if !isPositionValid && nrPhotosTaken > 0 {
+            return "Return to your capture spot"
+        }
+        if takingPicture {
+            return "Capturing…"
+        }
+        if canCapture {
+            return "Hold steady…"
+        }
+        guard activeGuideTargetID != nil else { return nil }
+
+        var yawErr = currentTargetYaw - liveYaw
+        if yawErr > 180 { yawErr -= 360 }
+        if yawErr < -180 { yawErr += 360 }
+        let pitchErr = currentTargetPitch - livePitch
+
+        if abs(yawErr) < 6 && abs(pitchErr) < 6 {
+            return "Almost there — hold steady"
+        }
+
+        if abs(yawErr) > abs(pitchErr) {
+            return yawErr > 0
+                ? "Tilt your device to the right"
+                : "Tilt your device to the left"
+        }
+        return pitchErr > 0
+            ? "Tilt your device up"
+            : "Tilt your device down"
+    }
+
+    var cameraYawDeg: Double {
+        let forward = arManager.cameraForward
+        var yaw = atan2(Double(forward.x), Double(-forward.z)) * 180.0 / .pi
+        if yaw < 0 { yaw += 360 }
+        return yaw
+    }
+
+    var cameraPitchDeg: Double {
+        asin(Double(arManager.cameraForward.y)) * 180.0 / .pi
+    }
+
+    init() {
+        syncFromEngine()
+    }
 
     func startCapture() async {
         sessionId = UUID().uuidString
         capturedImages = [:]
-        capturedHDR = [:]
+        capturedActualPositions = [:]
         capturedThumbnails = [:]
+        firstCaptureThumbnail = nil
         nrPhotosTaken = 0
         isComplete = false
-        globe.reset()
-        buildTargets()
-        clearHold()
-        stableFrameCount = 0
-        captureRequestPending = false
-        firstShotArmed = false
-        initialForwardDirection = nil
-        currentSequenceIndex = 0
-        captureOriginPosition = nil
-        captureReferenceYawDeg = nil
-        positionDriftMeters = 0
+        stitchedPanorama = nil
+        qualityWarning = nil
+        takingPicture = false
+        phase = .initialLock
 
-        // Place green dots on the 3D globe at each target position
-        let dotPositions = captureTargets.map { (id: $0.id, yawDeg: $0.yawDeg, pitchDeg: $0.pitchDeg) }
-        globe.addDotNodes(targets: dotPositions)
-        globe.setVisibleDotIDs(visibleGlobeDotIDs)
+        globe.reset()
+        mosaicRenderer.reset()
+
+        sphereCapture.beginSession()
+        syncFromEngine()
 
         await arManager.start()
     }
 
     func stopCapture() {
         arManager.stop()
-        clearHold()
     }
 
     func reset() {
         capturedImages = [:]
-        capturedHDR = [:]
+        capturedActualPositions = [:]
         capturedThumbnails = [:]
+        firstCaptureThumbnail = nil
         nrPhotosTaken = 0
         isComplete = false
-        globe.reset()
-        buildTargets()
-        clearHold()
-        stableFrameCount = 0
-        captureRequestPending = false
-        firstShotArmed = false
-        initialForwardDirection = nil
-        currentSequenceIndex = 0
-        captureOriginPosition = nil
-        captureReferenceYawDeg = nil
-        positionDriftMeters = 0
-    }
+        stitchedPanorama = nil
+        qualityWarning = nil
+        takingPicture = false
+        phase = .initialLock
+        lastGuideViewportSize = .zero
 
-    // MARK: - Per-frame update (30 fps, driven by GuidedCaptureView timer)
+        globe.reset()
+        mosaicRenderer.reset()
+        sphereCapture.reset()
+        arManager.unlockCameraSettings()
+        arManager.stop()
+
+        syncFromEngine()
+    }
 
     func updateFrame() {
         arManager.processCurrentFrame()
-        guard arManager.isAvailable else { return }
-
         trackingQuality = arManager.trackingQuality
-        refreshSequenceIndex()
-        globe.setVisibleDotIDs(visibleGlobeDotIDs)
 
-        if initialForwardDirection == nil {
-            let fwd = arManager.cameraForward
-            let len = simd_length(fwd)
-            if len > 0.0001 {
-                initialForwardDirection = fwd / len
-            }
-        }
+        sphereCapture.processFrame(
+            frame: arManager.currentFrame,
+            trackingQuality: arManager.trackingQuality,
+            opticsReady: arManager.opticsReady,
+            angularVelocityDegSec: arManager.angularVelocity,
+            previewSize: lastGuideViewportSize,
+            interfaceOrientation: currentInterfaceOrientation
+        )
 
-        if isFirstSequenceShot && !firstShotArmed && arManager.angularVelocity > 3.0 {
-            // Prevent immediate auto-capture on screen load.
-            // User must move once, then align center to register start.
-            firstShotArmed = true
-        }
+        syncFromEngine()
 
-        if let origin = captureOriginPosition {
-            positionDriftMeters = simd_distance(arManager.cameraPosition, origin)
+        if holdProgress > 0, let activeID = activeGuideTargetID {
+            alignedDotId = activeID
         } else {
-            positionDriftMeters = 0
-        }
-
-        if nrPhotosTaken >= nrPhotos {
-            markCompleteIfNeeded()
-            return
-        }
-
-        // ── Cooldown after capture ──────────────────────────────────────
-        if let last = lastCaptureTime,
-           Date().timeIntervalSince(last) < Self.cooldownDuration {
             alignedDotId = nil
-            holdProgress = 0
-            isWaitingToCapture = false
-            captureRequestPending = false
-            globe.updateRingProgress(alignedId: nil, progress: 0)
-            return
         }
 
-        // ── Teleport-style deterministic target order ───────────────────
-        // Always guide/capture the next uncaptured target in sequence.
-        guard let activeId = activeGuideTargetID else { return }
-        guard let activeDirection = worldDirection(for: activeId) else { return }
+        if !isComplete && nrPhotosTaken == 0 && phase != .initialLock {
+            phase = .initialLock
+        }
 
-        let forward = simd_normalize(arManager.cameraForward)
-        let alignment = simd_dot(forward, simd_normalize(activeDirection))
-        let isDirectionAligned = alignment > Self.alignmentThreshold
-        let isEyeLevelValid = !isFirstSequenceShot || isFirstShotEyeLevelValid
-        let isFirstShotCaptureReady = !isFirstSequenceShot || firstShotArmed
-        let isCaptureEligible = isDirectionAligned && captureGatesReady && isFirstShotCaptureReady && !takingPicture
-
-        if isCaptureEligible {
-            stableFrameCount += 1
+        // Live camera → sphere texture during initialLock
+        // Uses capture FOV so live window matches captured photo window size.
+        // Positioned at current device orientation so it always appears where the iPhone is facing.
+        if phase == .initialLock {
+            if let camImg = arManager.cameraImage {
+                let fov = displayWarpFOV
+                // Map camera yaw to equirectangular longitude:
+                // cameraYaw=0 → facing -Z → equirect λ=180°
+                // The warp forward at yawDeg=0 is +Z (λ=0), so offset by 180°.
+                let sphereYaw = fmod(180.0 - cameraYawDeg + 360.0, 360.0)
+                mosaicRenderer.updateLivePreview(
+                    image: camImg,
+                    yawDeg: sphereYaw,
+                    pitchDeg: cameraPitchDeg,
+                    rollDeg: 0,
+                    hfovDeg: fov.hDeg,
+                    vfovDeg: fov.vDeg
+                )
+                globe.setMosaicTexture(mosaicRenderer.liveImage)
+            }
         } else {
-            stableFrameCount = 0
+            mosaicRenderer.clearLive()
         }
 
-        // ── Hold timer management ───────────────────────────────────────
-        let previousAlignedId = alignedDotId
-        alignedDotId = (isDirectionAligned && isEyeLevelValid) ? activeId : nil
+        guard !takingPicture else { return }
+        guard let targetID = sphereCapture.consumePendingCaptureTargetID() else { return }
 
-        if !isCaptureEligible || stableFrameCount < Self.requiredStableFrames || previousAlignedId != alignedDotId {
-            if holdStartTime != nil { clearHold() }
-            globe.updateRingProgress(alignedId: nil, progress: 0)
-        }
-
-        if isCaptureEligible && stableFrameCount >= Self.requiredStableFrames {
-            if Self.instantCaptureMode {
-                holdProgress = 1.0
-                globe.updateRingProgress(alignedId: alignedDotId, progress: 1.0)
-                if !captureRequestPending && !takingPicture {
-                    captureRequestPending = true
-                    Task { await capturePhoto(for: activeId) }
-                }
-                return
-            }
-
-            if holdStartTime == nil {
-                holdStartTime = Date()
-                isWaitingToCapture = true
-                HapticManager.light()
-            }
-            holdProgress = min(1.0, Date().timeIntervalSince(holdStartTime!) / Self.holdDuration)
-
-            // Update 3D ring animation on the globe
-            globe.updateRingProgress(alignedId: alignedDotId, progress: CGFloat(holdProgress))
-
-            if holdProgress >= 1.0 && !takingPicture {
-                Task { await capturePhoto(for: activeId) }
-            }
-        }
-
+        Task { await capturePhoto(for: targetID) }
     }
 
-    /// Lightweight frame update for the completion globe phase.
-    /// Keeps processing ARKit frames so orientation tracking continues
-    /// and the globe camera follows the user's gaze.
     func updateOrientationOnly() {
         arManager.processCurrentFrame()
+        objectWillChange.send()
     }
 
-    // MARK: - Photo Capture (Enhanced)
+    func manualCaptureIfValid() {
+        guard !takingPicture,
+              let targetID = sphereCapture.requestManualCapture() else { return }
 
-    private func capturePhoto(for dotId: Int) async {
-        defer { captureRequestPending = false }
-        guard dotId < captureTargets.count, !captureTargets[dotId].isCaptured, !takingPicture else { return }
-        guard dotId == activeGuideTargetID else { return }
-        guard alignedDotId == dotId else { return }
-        guard !isFirstSequenceShot || isFirstShotEyeLevelValid else { return }
+        Task { await capturePhoto(for: targetID) }
+    }
+
+    func setGuideViewportSize(_ size: CGSize) {
+        lastGuideViewportSize = size
+    }
+
+    // MARK: - 3D-Projected Target Dots
+
+    struct ProjectedDot: Identifiable {
+        let id: Int
+        let screenPoint: CGPoint
+        let isCaptured: Bool
+        let isActive: Bool
+    }
+
+    /// Projects all 16 target positions into screen coordinates using perspective
+    /// projection that matches the SceneKit globe camera (110° vertical FOV).
+    /// Returns only dots that are in front of the camera and within the view frustum.
+    func visibleTargetDots(screenSize: CGSize) -> [ProjectedDot] {
+        lastGuideViewportSize = screenSize
+        var dots: [ProjectedDot] = []
+
+        let globeVFOVDeg: Double = 120
+        let aspect = Double(screenSize.width / screenSize.height)
+        let tanHalfV = tan(globeVFOVDeg / 2 * .pi / 180)
+        let tanHalfH = tanHalfV * aspect
+
+        let activeID = activeGuideTargetID ?? -1
+
+        for i in 0..<SphereGrid.count {
+            var yawErr = SphereGrid.targets[i].yawDeg - liveYaw
+            if yawErr > 180 { yawErr -= 360 }
+            if yawErr < -180 { yawErr += 360 }
+            let pitchErr = SphereGrid.targets[i].pitchDeg - livePitch
+
+            let yawRad = yawErr * .pi / 180
+            let pitchRad = pitchErr * .pi / 180
+
+            let tanX = tan(yawRad)
+            let tanY = tan(pitchRad)
+
+            // Behind camera or outside frustum
+            guard abs(yawErr) < 80, abs(pitchErr) < 80 else { continue }
+
+            let fractionX = tanX / tanHalfH
+            let fractionY = tanY / tanHalfV
+            guard abs(fractionX) < 1.15, abs(fractionY) < 1.15 else { continue }
+
+            let sx = screenSize.width / 2 + CGFloat(fractionX) * screenSize.width / 2
+            let sy = screenSize.height / 2 - CGFloat(fractionY) * screenSize.height / 2
+
+            dots.append(ProjectedDot(
+                id: i,
+                screenPoint: CGPoint(x: sx, y: sy),
+                isCaptured: targetVisited[i],
+                isActive: i == activeID
+            ))
+        }
+
+        return dots
+    }
+
+    private func capturePhoto(for targetID: Int) async {
+        guard !takingPicture else { return }
         takingPicture = true
 
+        defer {
+            takingPicture = false
+        }
+
         do {
-            let previewData: Data
+            var imageData = try await arManager.capturePhoto()
+            let timestamp = Date().timeIntervalSince1970
+            let captureTransform = arManager.cameraTransform
+            let captureRoll = arManager.rollDeg
+            let metadata = sphereCapture.buildPhotoMetadata(
+                timestamp: timestamp,
+                rollDeg: captureRoll,
+                cameraTransform: captureTransform
+            )
 
-            // ── HDR bracket via ARKit camera device exposure control ────
-            var hdrResult: HDRBracketResult?
-            if hdrEnabled {
-                do {
-                    let frames = try await arManager.captureHDRBracket()
-                    hdrResult = HDRProcessor.merge(frames: frames)
-                    if hdrResult == nil {
-                        qualityWarning = "HDR fusion failed — using single exposure"
-                        HapticManager.light()
-                        clearWarningAfterDelay("HDR fusion failed — using single exposure")
-                    }
-                } catch let error as ARCaptureError where error == .excessiveMotion {
-                    qualityWarning = "Hold still during HDR capture"
-                    HapticManager.error()
-                    clearWarningAfterDelay("Hold still during HDR capture")
-                    takingPicture = false
-                    clearHold()
-                    stableFrameCount = 0
-                    return
-                } catch {
-                    qualityWarning = "HDR failed — using single exposure"
-                    HapticManager.light()
-                    clearWarningAfterDelay("HDR failed — using single exposure")
-                }
-            }
-            if let hdr = hdrResult {
-                capturedHDR[dotId] = hdr
-                previewData = hdr.previewJPEG
-            } else {
-                previewData = try await arManager.capturePhoto()
+            if let metadata,
+               let metadataJSON = try? JSONEncoder().encode(metadata),
+               let metadataString = String(data: metadataJSON, encoding: .utf8) {
+                imageData = FileHelper.embedEXIFUserComment(in: imageData, userComment: metadataString)
             }
 
-            // ── Quality check (blur + brightness + overexposure) ────────
-            let quality = await QualityChecker.analyze(previewData)
-            let retryCount = captureTargets[dotId].retryCount
-
-            // Allow lower quality after maxRetries to avoid stuck targets
-            let strictCheck = retryCount < Self.maxRetries
-
-            if strictCheck && (quality.isBlurry || quality.isDark || quality.isOverexposed) {
-                var warnings: [String] = []
-                if quality.isBlurry { warnings.append("blurry") }
-                if quality.isDark { warnings.append("too dark") }
-                if quality.isOverexposed { warnings.append("overexposed") }
-                let warning = "Photo \(warnings.joined(separator: " & ")) — try again (\(retryCount + 1)/\(Self.maxRetries))"
+            let quality = await QualityChecker.analyze(imageData)
+            var warnings: [String] = []
+            if quality.isBlurry { warnings.append("blurry") }
+            if quality.isDark { warnings.append("too dark") }
+            if quality.isOverexposed { warnings.append("overexposed") }
+            if !warnings.isEmpty {
+                let warning = "Captured with \(warnings.joined(separator: " & "))"
                 qualityWarning = warning
-                HapticManager.error()
                 clearWarningAfterDelay(warning)
-                captureTargets[dotId].retryCount += 1
-                takingPicture = false
-                capturedHDR.removeValue(forKey: dotId)
-                clearHold()
-                stableFrameCount = 0
-                return
             }
 
-            // ── Store + update state ────────────────────────────────────
-            capturedImages[dotId] = previewData
-            if let img = UIImage(data: previewData) {
-                capturedThumbnails[dotId] = img
+            capturedImages[targetID] = imageData
+            if let metadata {
+                capturedActualPositions[targetID] = (yawDeg: metadata.actualYaw, pitchDeg: metadata.actualPitch)
+            } else {
+                capturedActualPositions[targetID] = (yawDeg: liveYaw, pitchDeg: livePitch)
             }
-            captureTargets[dotId].isCaptured = true
-            if captureReferenceYawDeg == nil {
-                // First accepted center shot becomes the orientation reference.
-                captureReferenceYawDeg = cameraYawDeg
-            }
-            if captureOriginPosition == nil {
-                captureOriginPosition = arManager.cameraPosition
-            }
-            nrPhotosTaken += 1
-            refreshSequenceIndex()
-            globe.setVisibleDotIDs(visibleGlobeDotIDs)
 
-            // Place photo on the live globe + mark dot as captured on sphere
-            let t = captureTargets[dotId]
-            globe.addPhoto(imageData: previewData,
-                           yawDeg: t.yawDeg,
-                           elevationDeg: t.pitchDeg)
-            globe.markDotCaptured(id: dotId)
+            if let preview = await Self.generatePreview(from: imageData, maxDimension: 1280) {
+                capturedThumbnails[targetID] = preview
+                if firstCaptureThumbnail == nil {
+                    firstCaptureThumbnail = preview
+                }
+            } else if firstCaptureThumbnail == nil,
+                      let preview = UIImage(data: imageData) {
+                firstCaptureThumbnail = preview
+            }
 
-            FileHelper.saveCapture(previewData, sessionId: sessionId, step: dotId + 1)
+            if !arManager.cameraLocked {
+                arManager.lockCameraSettings()
+            }
+
+            // Warp capture into the live mosaic preview
+            let mosaicYaw: Double
+            let mosaicPitch: Double
+            let mosaicRoll: Double
+            if let m = metadata {
+                mosaicYaw = m.actualYaw
+                mosaicPitch = m.actualPitch
+                mosaicRoll = m.actualRoll
+            } else {
+                mosaicYaw = liveYaw
+                mosaicPitch = livePitch
+                mosaicRoll = captureRoll
+            }
+            let warpFOV = displayWarpFOV
+            // mosaicYaw is from SphereCaptureManager which uses atan2(x, z) — yaw=0 is +Z.
+            // The warp convention is also yaw=0 → +Z. No conversion needed.
+            mosaicRenderer.blendCapture(
+                imageData: imageData,
+                yawDeg: mosaicYaw,
+                pitchDeg: mosaicPitch,
+                rollDeg: 0,
+                hfovDeg: warpFOV.hDeg,
+                vfovDeg: warpFOV.vDeg
+            )
+            globe.setMosaicTexture(mosaicRenderer.mosaicImage)
+
+            FileHelper.saveCapture(imageData, sessionId: sessionId, step: targetID + 1)
+
+            if let metadata {
+                FileHelper.saveCaptureMetadata(metadata, sessionId: sessionId, step: targetID + 1)
+                sphereCapture.markPhotoAccepted(targetID: targetID, metadata: metadata)
+            } else {
+                let fallback = SphereCapturePhotoMetadata(
+                    photoIndex: currentTargetIndex,
+                    targetID: targetID,
+                    targetYaw: currentTargetYaw,
+                    targetPitch: currentTargetPitch,
+                    actualYaw: liveYaw,
+                    actualPitch: livePitch,
+                    actualRoll: captureRoll,
+                    cameraTransform: SphereCapturePhotoMetadata.flatTransform(captureTransform),
+                    yawError: yawError,
+                    pitchError: pitchError,
+                    angleErrorDeg: angleErrorDeg,
+                    translationErrorMeters: translationErrorMeters,
+                    targetScreenX: Double(targetScreenPoint.x),
+                    targetScreenY: Double(targetScreenPoint.y),
+                    holdDurationUsed: holdProgress * sphereCapture.config.stableHoldDuration,
+                    timestamp: timestamp
+                )
+                FileHelper.saveCaptureMetadata(fallback, sessionId: sessionId, step: targetID + 1)
+                sphereCapture.markPhotoAccepted(targetID: targetID, metadata: fallback)
+            }
+
             HapticManager.success()
+            syncFromEngine()
+
+            // Phase transitions after capture
+            mosaicRenderer.clearLive()
+            if nrPhotosTaken == 1 && phase == .initialLock {
+                phase = .firstCaptureCommitted
+                Task { @MainActor [weak self] in
+                    try? await Task.sleep(nanoseconds: 700_000_000)
+                    guard let self, self.phase == .firstCaptureCommitted else { return }
+                    self.phase = .guidedContinuation
+                }
+            } else if phase == .firstCaptureCommitted || phase == .initialLock {
+                phase = .guidedContinuation
+            }
+
+            if scanCompleted {
+                let summary = sphereCapture.buildScanSummaryMetadata(sessionId: sessionId)
+                FileHelper.saveScanSummaryMetadata(summary, sessionId: sessionId)
+
+                let hfov = Double(arManager.portraitHFOVRadians) * 180.0 / .pi
+                let vfov = Double(arManager.portraitVFOVRadians) * 180.0 / .pi
+                let manifest = sphereCapture.buildCaptureManifest(
+                    sessionId: sessionId,
+                    cameraHFOVDeg: hfov,
+                    cameraVFOVDeg: vfov
+                )
+                FileHelper.saveManifest(manifest, sessionId: sessionId)
+
+                markCompleteIfNeeded()
+            }
+
         } catch {
             print("Capture error: \(error)")
             qualityWarning = "Capture failed — try again"
             HapticManager.error()
             clearWarningAfterDelay("Capture failed — try again")
         }
-
-        lastCaptureTime = Date()
-        clearHold()
-        stableFrameCount = 0
-        takingPicture = false
     }
 
-    // MARK: - Direction Hint (camera-local space)
-
-    /// HUD hint pointing toward the next uncaptured target.
-    var directionHint: String? {
-        if !trackingQuality.isGoodForCapture {
-            return "Move slowly to initialize tracking"
-        }
-        if arManager.angularVelocity > Self.maxAngularVelocityDegPerSec {
-            return "Hold still"
-        }
-        if !isPositionWithinTolerance {
-            return "Return to capture spot"
-        }
-        if isFirstSequenceShot && !firstShotArmed {
-            return "Move phone slightly, then align center"
-        }
-        if isFirstSequenceShot && !isFirstShotEyeLevelValid {
-            return "Hold phone at eye level"
-        }
-
-        guard let activeId = activeGuideTargetID,
-              let nextDirection = worldDirection(for: activeId) else { return nil }
-
-        let forward = simd_normalize(arManager.cameraForward)
-
-        // If already close, no hint needed
-        if simd_dot(forward, nextDirection) > Self.alignmentThreshold { return nil }
-
-        // Transform target direction into camera local space
-        let invTransform = arManager.cameraTransform.inverse
-        let worldDir = simd_float4(nextDirection.x,
-                                   nextDirection.y,
-                                   nextDirection.z, 0)
-        let localDir = invTransform * worldDir
-        let local = simd_make_float3(localDir)
-
-        // local.x > 0 → target is to the right
-        // local.y > 0 → target is above
-        if abs(local.x) > abs(local.y) {
-            return local.x > 0 ? "Turn right →" : "← Turn left"
-        }
-        return local.y > 0 ? "Look up ↑" : "Look down ↓"
-    }
-
-    /// Band label for the next uncaptured target.
-    var currentBandLabel: String? {
-        guard let activeId = activeGuideTargetID else { return nil }
-        let next = captureTargets[activeId]
-        switch next.pitchDeg {
-        case 20...:    return "Upper"
-        case -20..<20: return "Horizon"
-        default:       return "Lower"
-        }
-    }
-
-    var isFirstShotEyeLevelValid: Bool {
-        abs(cameraPitchDeg) <= Self.firstShotEyeLevelToleranceDeg
-    }
-
-    var isPositionWithinTolerance: Bool {
-        guard captureOriginPosition != nil else { return true }
-        return positionDriftMeters <= Self.maxPositionDriftMeters
-    }
-
-    var captureGatesReady: Bool {
-        trackingQuality.isGoodForCapture &&
-            arManager.angularVelocity <= Self.maxAngularVelocityDegPerSec &&
-            isPositionWithinTolerance &&
-            (!isFirstSequenceShot || isFirstShotEyeLevelValid)
-    }
-
-    var needsFirstShotArming: Bool {
-        isFirstSequenceShot && !firstShotArmed
-    }
-
-    var activeGuideTargetID: Int? {
-        guard currentSequenceIndex < Self.captureSequence.count else { return nil }
-        let id = Self.captureSequence[currentSequenceIndex]
-        guard captureTargets.indices.contains(id), !captureTargets[id].isCaptured else { return nil }
-        return id
-    }
-
-    var visibleGuideTargetIDs: [Int] {
-        if nrPhotosTaken == 0 { return [0] }
-
-        let pending = Self.captureSequence[currentSequenceIndex...]
-            .filter { captureTargets.indices.contains($0) && !captureTargets[$0].isCaptured }
-
-        return Array(pending.prefix(4))
-    }
-
-    private var visibleGlobeDotIDs: Set<Int> {
-        // Use 2D frame guidance only; keep globe dots hidden for cleaner UX.
-        []
-    }
-
-    func guideDots(for viewportSize: CGSize) -> [GuideDot] {
-        let activeId = activeGuideTargetID
-        let horizontalInset: CGFloat = 8
-        let verticalInset: CGFloat = 8
-        let center = CGPoint(x: viewportSize.width / 2, y: viewportSize.height / 2)
-        let minRadius = min(viewportSize.width, viewportSize.height) * 0.24
-
-        // First ring after center capture: force cardinal edge dots for cleaner UX.
-        if nrPhotosTaken > 0 && currentSequenceIndex <= 4 {
-            return visibleGuideTargetIDs.compactMap { id in
-                guard captureTargets.indices.contains(id),
-                      let point = firstRingPoint(for: id, viewportSize: viewportSize) else {
-                    return nil
-                }
-                return GuideDot(
-                    id: id,
-                    screenPoint: point,
-                    isActive: id == activeId,
-                    isCaptured: captureTargets[id].isCaptured
-                )
-            }
-        }
-
-        return visibleGuideTargetIDs.compactMap { id in
-            guard captureTargets.indices.contains(id) else { return nil }
-            guard let direction = worldDirection(for: id),
-                  let projected = arManager.projectToScreen(direction: direction, viewportSize: viewportSize) else {
+    private static func generatePreview(from jpegData: Data, maxDimension: CGFloat) async -> UIImage? {
+        await Task.detached(priority: .userInitiated) {
+            guard let source = CGImageSourceCreateWithData(jpegData as CFData, nil) else { return nil }
+            let options: [CFString: Any] = [
+                kCGImageSourceThumbnailMaxPixelSize: maxDimension,
+                kCGImageSourceCreateThumbnailFromImageAlways: true,
+                kCGImageSourceCreateThumbnailWithTransform: true
+            ]
+            guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
                 return nil
             }
-
-            // Push projected points outward so post-anchor dots sit near frame edges.
-            let dx = projected.x - center.x
-            let dy = projected.y - center.y
-            let distance = hypot(dx, dy)
-            let unitX = distance > 0.001 ? dx / distance : 0
-            let unitY = distance > 0.001 ? dy / distance : 0
-
-            var guidedDistance = distance * Self.projectedGuideSpread
-            if nrPhotosTaken > 0 {
-                guidedDistance = max(guidedDistance, minRadius)
-            }
-
-            let guided = CGPoint(
-                x: center.x + unitX * guidedDistance,
-                y: center.y + unitY * guidedDistance
-            )
-
-            let clampedX = min(max(guided.x, horizontalInset), viewportSize.width - horizontalInset)
-            let clampedY = min(max(guided.y, verticalInset), viewportSize.height - verticalInset)
-            return GuideDot(
-                id: id,
-                screenPoint: CGPoint(x: clampedX, y: clampedY),
-                isActive: id == activeId,
-                isCaptured: captureTargets[id].isCaptured
-            )
-        }
-    }
-
-    private func firstRingPoint(for id: Int, viewportSize: CGSize) -> CGPoint? {
-        guard Self.firstRingIDs.contains(id) else { return nil }
-        let w = viewportSize.width
-        let h = viewportSize.height
-
-        switch id {
-        case 2:  return CGPoint(x: w,      y: h * 0.5)  // right
-        case 8:  return CGPoint(x: w * 0.5, y: 0)       // top
-        case 6:  return CGPoint(x: 0,      y: h * 0.5)  // left
-        case 12: return CGPoint(x: w * 0.5, y: h)       // bottom
-        default: return nil
-        }
-    }
-
-    func activeGuidePointer(for viewportSize: CGSize) -> GuidePointer? {
-        guard nrPhotosTaken > 0 else { return nil }
-        guard let activeId = activeGuideTargetID else { return nil }
-        guard !guideDots(for: viewportSize).contains(where: { $0.id == activeId }) else { return nil }
-        guard captureTargets.indices.contains(activeId) else { return nil }
-
-        guard let direction = worldDirection(for: activeId) else { return nil }
-        let invTransform = arManager.cameraTransform.inverse
-        let worldDir = simd_float4(direction.x, direction.y, direction.z, 0)
-        let localDir4 = invTransform * worldDir
-        let localDir = simd_make_float3(localDir4)
-
-        var v = CGVector(dx: CGFloat(localDir.x), dy: CGFloat(-localDir.y))
-        let mag = max(0.001, sqrt(v.dx * v.dx + v.dy * v.dy))
-        v.dx /= mag
-        v.dy /= mag
-
-        let center = CGPoint(x: viewportSize.width / 2, y: viewportSize.height / 2)
-        let radius = min(viewportSize.width, viewportSize.height) * 0.40
-        let point = CGPoint(x: center.x + v.dx * radius, y: center.y + v.dy * radius)
-        let angle = atan2(v.dy, v.dx) * 180.0 / .pi
-        return GuidePointer(screenPoint: point, angleDeg: angle)
-    }
-
-    var nextShotText: String {
-        let nextNumber = min(nrPhotosTaken + 1, nrPhotos)
-        if let band = currentBandLabel {
-            return "Shot \(nextNumber) of \(nrPhotos) • \(band)"
-        }
-        return "Shot \(nextNumber) of \(nrPhotos)"
-    }
-
-    // MARK: - Camera orientation for LiveGlobeView (derived from forward vector)
-
-    /// Yaw in degrees (0–360, clockwise from start) for the live globe camera.
-    var cameraYawDeg: Double {
-        let f = arManager.cameraForward
-        var yaw = atan2(Double(f.x), Double(-f.z)) * 180.0 / .pi
-        if yaw < 0 { yaw += 360 }
-        return yaw
-    }
-
-    /// Pitch in degrees (0 = horizon, + = up, − = down) for the live globe camera.
-    var cameraPitchDeg: Double {
-        return asin(Double(arManager.cameraForward.y)) * 180.0 / .pi
-    }
-
-    // MARK: - Helpers
-
-    private func buildTargets() {
-        captureTargets = SphereGrid.targets.enumerated().map { i, t in
-            CaptureTarget(id: i, yawDeg: t.yawDeg, pitchDeg: t.pitchDeg,
-                          direction: t.direction)
-        }
-    }
-
-    private var isFirstSequenceShot: Bool {
-        currentSequenceIndex == 0
-    }
-
-    private func refreshSequenceIndex() {
-        while currentSequenceIndex < Self.captureSequence.count {
-            let id = Self.captureSequence[currentSequenceIndex]
-            if captureTargets.indices.contains(id), captureTargets[id].isCaptured {
-                currentSequenceIndex += 1
-            } else {
-                break
-            }
-        }
-    }
-
-    /// World-space direction used for guidance/alignment.
-    /// Before first capture, target 0 follows live camera forward so
-    /// the center circle always represents the starting-point registration.
-    private func worldDirection(for targetId: Int) -> simd_float3? {
-        guard captureTargets.indices.contains(targetId) else { return nil }
-
-        if captureReferenceYawDeg == nil, targetId == 0 {
-            let fwd = initialForwardDirection ?? arManager.cameraForward
-            let len = simd_length(fwd)
-            if len > 0.0001 {
-                return fwd / len
-            }
-            return simd_float3(0, 0, -1)
-        }
-
-        let local = captureTargets[targetId].direction
-        guard let yaw = captureReferenceYawDeg else { return local }
-        return rotatedAroundWorldY(local, yawDeg: yaw)
-    }
-
-    private func rotatedAroundWorldY(_ vector: simd_float3, yawDeg: Double) -> simd_float3 {
-        let r = Float(yawDeg * .pi / 180.0)
-        let c = cos(r)
-        let s = sin(r)
-        let rotated = simd_float3(
-            vector.x * c - vector.z * s,
-            vector.y,
-            vector.x * s + vector.z * c
-        )
-        return simd_normalize(rotated)
+            return UIImage(cgImage: cgImage)
+        }.value
     }
 
     private func markCompleteIfNeeded() {
         guard !isComplete else { return }
+
         isComplete = true
+        phase = .stitching
         HapticManager.success()
+
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
             HapticManager.success()
         }
-        // Keep AR running so user can look around completed globe.
+
+        let hfov = Double(arManager.portraitHFOVRadians) * 180.0 / .pi
+        let vfov = Double(arManager.portraitVFOVRadians) * 180.0 / .pi
+
+        let plan = StitchPreparation.prepare(
+            sessionId: sessionId,
+            capturedImages: capturedImages,
+            capturedPositions: capturedActualPositions,
+            photoMetadata: sphereCapture.photoMetadata,
+            orderedTargetIDs: sphereCapture.orderedTargetIDs,
+            hfovDeg: hfov,
+            vfovDeg: vfov
+        )
+
+        if !plan.isComplete {
+            print("⚠️ Stitch plan incomplete: missing targets \(plan.missingTargetIDs)")
+        }
+
+        Task.detached(priority: .userInitiated) { [weak self] in
+            let result = PanoramaStitcher.stitch(plan: plan)
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                if let data = result, let image = UIImage(data: data) {
+                    self.stitchedPanorama = image
+                }
+                self.phase = .completed
+            }
+        }
     }
 
-    private func clearHold() {
-        holdStartTime = nil
-        holdProgress = 0
-        isWaitingToCapture = false
+    private func syncFromEngine() {
+        currentTargetIndex = sphereCapture.currentTargetIndex
+        totalTargets = sphereCapture.totalTargets
+        progress = sphereCapture.progress
+        currentTargetYaw = sphereCapture.currentTargetYaw
+        currentTargetPitch = sphereCapture.currentTargetPitch
+        liveYaw = sphereCapture.liveYaw
+        livePitch = sphereCapture.livePitch
+        yawError = sphereCapture.yawError
+        pitchError = sphereCapture.pitchError
+        angleErrorDeg = sphereCapture.angleErrorDeg
+        translationErrorMeters = Double(sphereCapture.translationErrorMeters)
+        targetScreenPoint = sphereCapture.targetScreenPoint
+        isPositionValid = sphereCapture.isPositionValid
+        isAngleValid = sphereCapture.isAngleValid
+        isScreenAligned = sphereCapture.isScreenAligned
+        holdProgress = sphereCapture.holdProgress
+        canCapture = sphereCapture.canCapture
+        trackingState = arManager.trackingQuality
+        scannerState = sphereCapture.scannerState
+        targetVisited = sphereCapture.targetVisited
+        visitedTargets = sphereCapture.visitedTargets
+        remainingTargets = sphereCapture.remainingTargets
+        coverageFraction = sphereCapture.coverageFraction
+        warningUserMoved = sphereCapture.warningUserMoved
+        warningTrackingLimited = sphereCapture.warningTrackingLimited
+        scanCompleted = sphereCapture.scanCompleted
+
+        nrPhotosTaken = sphereCapture.visitedTargets.count
+        positionDriftMeters = sphereCapture.translationErrorMeters
+        trackingQuality = arManager.trackingQuality
+        isWaitingToCapture = sphereCapture.scannerState == .alignedHolding
     }
 
-    /// Clear a quality warning after 2.5 seconds if it hasn't been replaced.
+    private var currentInterfaceOrientation: UIInterfaceOrientation {
+        UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .first(where: { $0.activationState == .foregroundActive })?
+            .interfaceOrientation ?? .portrait
+    }
+
     private func clearWarningAfterDelay(_ message: String) {
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 2_500_000_000)
-            if qualityWarning == message { qualityWarning = nil }
+            if qualityWarning == message {
+                qualityWarning = nil
+            }
         }
+    }
+}
+
+private extension Array {
+    subscript(safe index: Int) -> Element? {
+        guard indices.contains(index) else { return nil }
+        return self[index]
     }
 }

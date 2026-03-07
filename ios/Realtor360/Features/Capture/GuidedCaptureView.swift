@@ -2,23 +2,19 @@ import SwiftUI
 import ARKit
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Guided 360° Capture — Immersive Globe Interface
-//
-// The user sees the inside of a BLACK SPHERE with immersive guide overlays.
-// Green dots are scattered across the sphere at 16 precise positions. As the
-// user rotates their phone, the sphere
-// rotates — dots move naturally around them. When aim aligns with
-// a dot and the user holds steady, the photo auto-captures and that section
-// of the sphere fills with the real image.
-//
-// After all 16 shots, the full sphere is built and the user can look around
-// inside their completed 360° panorama before continuing.
+// Guided 360° Capture — Layered Sphere Scanner
 //
 // Architecture:
-//   Background → LiveGlobeView (SceneKit sphere, black → fills with photos)
-//   Reticle    → Center aim rings + hold progress
-//   Dots       → 2D projected overlays (green circles on sphere surface)
-//   Capture    → CaptureViewModel (alignment → hold → HDR bracket → globe)
+//   Layer 0  → Black (always)
+//   Layer 1  → Globe sphere (always visible, tracks orientation)
+//              During initialLock: live camera warped into sphere texture
+//              After captures: captured photos stitched into sphere texture
+//   Layer 2  → Targeting square (white border aim guide, always visible)
+//   Layer 3  → 3D-projected green target dots + fixed center capture ring
+//              During initialLock: only active dot shown
+//              After first capture: all uncaptured dots shown
+//   Layer 4  → HUD (progress, guidance, warnings)
+//   Completion → Opaque globe for look-around
 // ─────────────────────────────────────────────────────────────────────────────
 
 struct GuidedCaptureView: View {
@@ -38,22 +34,17 @@ struct GuidedCaptureView: View {
     var body: some View {
         GeometryReader { geo in
             let size = geo.size
-            let frameW = size.width * 0.82
-            // Match portrait camera aspect (~3:4) so preview is not over-cropped/zoomed.
-            let frameH = frameW * (4.0 / 3.0)
-            let frameCenterY = size.height * 0.57
-            let frameRect = CGRect(
-                x: (size.width - frameW) / 2,
-                y: frameCenterY - (frameH / 2),
-                width: frameW,
-                height: frameH
-            )
 
             ZStack {
-                // ── 1. Full-screen globe (black sphere, fills with photos) ──
                 Color.black.ignoresSafeArea()
 
-                if showCompletionGlobe {
+                // ── Stitching spinner ───────────────────────────────
+                if captureVM.phase == .stitching {
+                    stitchingOverlay
+                }
+
+                // ── Completion: opaque sphere look-around ───────────
+                if captureVM.phase == .completed && showCompletionGlobe {
                     LiveGlobeView(
                         deviceYaw: captureVM.cameraYawDeg,
                         devicePitch: captureVM.cameraPitchDeg,
@@ -62,38 +53,40 @@ struct GuidedCaptureView: View {
                     .ignoresSafeArea()
                 }
 
-                if !showCompletionGlobe {
-                    // ── 2. Competitor-style framed camera area ──────────────
-                    CameraFeedView(image: captureVM.arManager.cameraImage)
-                        .frame(width: frameRect.width, height: frameRect.height)
-                        .clipShape(RoundedRectangle(cornerRadius: 2))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 2)
-                                .stroke(Color.white.opacity(0.88), lineWidth: 1.6)
-                        )
-                        .position(x: frameRect.midX, y: frameRect.midY)
-                        .allowsHitTesting(false)
+                if captureVM.phase.isCapturing {
 
-                    // ── 3. Progressive projected guide dots ─────────────────
-                    ProjectedGuideDotsOverlay(
-                        guideDots: captureVM.guideDots(for: frameRect.size),
-                        activeGuideTargetID: captureVM.activeGuideTargetID,
-                        progress: captureVM.holdProgress,
-                        showCenterOnly: captureVM.nrPhotosTaken == 0,
-                        isFirstShotEyeLevelValid: captureVM.isFirstShotEyeLevelValid,
-                        isPositionWithinTolerance: captureVM.isPositionWithinTolerance,
-                        frameRect: frameRect
+                    // ── Layer 1: Globe (always visible) ──
+                    // During initialLock: live camera is warped into the sphere texture
+                    // After captures: captured photos are stitched into sphere texture
+                    LiveGlobeView(
+                        deviceYaw: captureVM.cameraYawDeg,
+                        devicePitch: captureVM.cameraPitchDeg,
+                        globe: captureVM.globe
                     )
+                    .ignoresSafeArea()
+                    .allowsHitTesting(false)
+
+                    // ── Layer 2: Targeting square (aim guide — always visible) ──
+                    targetingSquare(screenSize: size)
                         .allowsHitTesting(false)
 
-                    // ── 4. Flash overlay ────────────────────────────────────
+                    // ── Layer 3: 3D-projected dots + center ring ──
+                    targetLockOverlay(screenSize: size)
+                        .allowsHitTesting(false)
+                        .onChange(of: captureVM.holdProgress) { old, new in
+                            if new > 0.95 && old <= 0.95 {
+                                HapticManager.success()
+                            }
+                        }
+
+                    // Flash overlay
                     if showFlash {
-                        Color.white.opacity(0.3)
+                        Color.white.opacity(0.35)
                             .ignoresSafeArea()
                             .allowsHitTesting(false)
                     }
 
-                    // ── 5. Quality warning ──────────────────────────────────
+                    // Quality warning
                     if let warning = captureVM.qualityWarning {
                         Text(warning)
                             .font(.system(size: 15, weight: .semibold))
@@ -106,7 +99,7 @@ struct GuidedCaptureView: View {
                             .animation(.easeInOut(duration: 0.3), value: captureVM.qualityWarning)
                     }
 
-                    // ── 6. Top bar + Bottom bar ─────────────────────────────
+                    // HUD
                     VStack(spacing: 0) {
                         topBar
                         Spacer()
@@ -114,17 +107,18 @@ struct GuidedCaptureView: View {
                     }
                 }
 
-                // ── 9. Completion globe (full-screen, look around) ──────────
-                if showCompletionGlobe {
+                // ── Completion overlay ─────────────────────────────
+                if captureVM.phase == .completed && showCompletionGlobe {
                     completionOverlay
                 }
 
-                // ── 10. Instruction modal (first launch) ────────────────────
+                // ── Instruction modal ──────────────────────────────
                 if showInstructions {
                     instructionOverlay
                 }
             }
             .onAppear {
+                captureVM.setGuideViewportSize(size)
                 startTimer()
                 if !instructionSeen { showInstructions = true }
             }
@@ -136,10 +130,11 @@ struct GuidedCaptureView: View {
             timer?.invalidate()
             globeTimer?.invalidate()
         }
-        .onChange(of: captureVM.isComplete) { _, done in
-            if done {
+        .onChange(of: captureVM.phase) { _, newPhase in
+            if newPhase == .stitching {
                 timer?.invalidate()
-                // Start a lightweight timer for globe orientation tracking
+            }
+            if newPhase == .completed {
                 globeTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30.0, repeats: true) { _ in
                     Task { @MainActor in captureVM.updateOrientationOnly() }
                 }
@@ -148,6 +143,7 @@ struct GuidedCaptureView: View {
                 }
             }
         }
+        .onChange(of: captureVM.isComplete) { old, new in }
         .onChange(of: captureVM.nrPhotosTaken) { old, new in
             if new > old { triggerFlash() }
         }
@@ -171,6 +167,12 @@ struct GuidedCaptureView: View {
                     .background(Color.white, in: Circle())
             }
             Spacer()
+
+            Text(captureVM.arManager.selectedLensLabel)
+                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                .foregroundColor(.white.opacity(0.5))
+
+            Spacer()
             Button { handleBack() } label: {
                 Image(systemName: "xmark")
                     .font(.system(size: 18, weight: .bold))
@@ -187,25 +189,34 @@ struct GuidedCaptureView: View {
 
     private var bottomBar: some View {
         VStack(spacing: 10) {
-            let guidance = captureVM.nrPhotosTaken == 0
-                ? (captureVM.needsFirstShotArming
-                    ? "Move phone slightly, then align center dot at eye level"
-                    : "Align center dot at eye level")
-                : "Shoot all photos from the same spot as your initial\nphoto to ensure an optimal result."
+            let guidance: String = {
+                switch captureVM.phase {
+                case .initialLock:
+                    return "Align the dot with the center ring"
+                case .firstCaptureCommitted:
+                    return "Shoot all photos from the same spot as your initial photo to ensure an optimal result."
+                case .guidedContinuation:
+                    return captureVM.directionHint
+                        ?? "Shoot all photos from the same spot as your initial photo to ensure an optimal result."
+                case .stitching:
+                    return "Building your 360° panorama…"
+                case .completed:
+                    return ""
+                }
+            }()
 
             Text(guidance)
-                .font(.system(size: 14, weight: .regular))
-            .foregroundColor(.white.opacity(0.92))
-            .multilineTextAlignment(.center)
-            .padding(.horizontal, 24)
-            .transition(.opacity)
-            .animation(.easeInOut(duration: 0.2), value: guidance)
+                .font(.system(size: 14, weight: .medium))
+                .foregroundColor(.white.opacity(0.9))
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 24)
+                .transition(.opacity)
+                .animation(.easeInOut(duration: 0.15), value: guidance)
 
-            // Progress bar
             HStack(spacing: 10) {
                 GeometryReader { geo in
                     ZStack(alignment: .leading) {
-                        Capsule().fill(Color.white.opacity(0.3))
+                        Capsule().fill(Color.white.opacity(0.2))
                         Capsule()
                             .fill(Color.green)
                             .frame(width: max(4, geo.size.width
@@ -214,11 +225,11 @@ struct GuidedCaptureView: View {
                             .animation(.easeInOut(duration: 0.35), value: captureVM.nrPhotosTaken)
                     }
                 }
-                .frame(height: 14)
+                .frame(height: 10)
 
                 Text("\(captureVM.nrPhotosTaken) of \(captureVM.nrPhotos)")
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundColor(.white)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundColor(.white.opacity(0.8))
                     .fixedSize()
             }
             .padding(.horizontal, 24)
@@ -226,11 +237,38 @@ struct GuidedCaptureView: View {
         }
     }
 
-    // MARK: - Completion Overlay (look around your sphere)
+    // MARK: - Stitching Overlay
+
+    private var stitchingOverlay: some View {
+        VStack(spacing: 24) {
+            Spacer()
+            ZStack {
+                Circle()
+                    .fill(Color.white.opacity(0.08))
+                    .frame(width: 120, height: 120)
+                ProgressView()
+                    .controlSize(.large)
+                    .tint(.white)
+            }
+            VStack(spacing: 8) {
+                Text("Building Panorama")
+                    .font(.system(size: 22, weight: .semibold))
+                    .foregroundColor(.white)
+                Text("Stitching 16 photos into a 360° equirectangular panorama…")
+                    .font(.system(size: 14))
+                    .foregroundColor(.white.opacity(0.65))
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 40)
+            }
+            Spacer()
+        }
+        .transition(.opacity)
+        .animation(.easeInOut(duration: 0.4), value: captureVM.phase)
+    }
+
+    // MARK: - Completion Overlay
 
     private var completionOverlay: some View {
-        // The globe is already showing as the full-screen background.
-        // Camera preview is hidden. User can look around in their sphere.
         VStack {
             Spacer()
 
@@ -268,7 +306,7 @@ struct GuidedCaptureView: View {
         .transition(.opacity)
     }
 
-    // MARK: - Instruction Modal (first-launch)
+    // MARK: - Instruction Modal
 
     private var instructionOverlay: some View {
         ZStack {
@@ -348,9 +386,96 @@ struct GuidedCaptureView: View {
         }
     }
 
-    // MARK: - Helpers
+    // MARK: - Targeting Square (aim guide — always visible)
 
-    // No-op helper removed (using projected guide dots overlay).
+    @ViewBuilder
+    private func targetingSquare(screenSize: CGSize) -> some View {
+        let windowW = screenSize.width * 0.78
+        let windowH = min(windowW / 0.75, screenSize.height * 0.55)
+        let adjustedW = windowH * 0.75
+
+        RoundedRectangle(cornerRadius: 3)
+            .stroke(Color.white.opacity(0.5), lineWidth: 2)
+            .frame(width: adjustedW, height: windowH)
+            .position(x: screenSize.width / 2, y: screenSize.height / 2)
+    }
+
+    // MARK: - Target Lock Overlay (3D-Projected Dots)
+
+    @ViewBuilder
+    private func targetLockOverlay(screenSize: CGSize) -> some View {
+        let ringCenter = CGPoint(x: screenSize.width / 2, y: screenSize.height / 2)
+        let dots = captureVM.visibleTargetDots(screenSize: screenSize)
+        let isInitialLock = captureVM.phase == .initialLock
+
+        ZStack {
+            ForEach(dots) { dot in
+                if !dot.isCaptured {
+                    // During initialLock: show ONLY the active dot
+                    // After first capture: show all uncaptured dots
+                    if !isInitialLock || dot.isActive {
+                        Circle()
+                            .fill(Color.green)
+                            .frame(
+                                width: dot.isActive ? 48 : 40,
+                                height: dot.isActive ? 48 : 40
+                            )
+                            .shadow(color: .green.opacity(0.6), radius: dot.isActive ? 12 : 6)
+                            .position(dot.screenPoint)
+                    }
+                }
+            }
+
+            centerRing(at: ringCenter, progress: captureVM.holdProgress)
+
+            if let activeDot = dots.first(where: { $0.isActive && !$0.isCaptured }) {
+                directionChevron(dotPosition: activeDot.screenPoint, ringCenter: ringCenter)
+            }
+        }
+    }
+
+    private func centerRing(at center: CGPoint, progress: Double) -> some View {
+        ZStack {
+            Circle()
+                .stroke(Color.white.opacity(0.9), lineWidth: 4)
+                .frame(width: 100, height: 100)
+                .position(center)
+
+            if progress > 0.01 {
+                Circle()
+                    .trim(from: 0, to: max(0.02, progress))
+                    .stroke(Color.green, style: StrokeStyle(lineWidth: 6, lineCap: .round))
+                    .frame(width: 114, height: 114)
+                    .rotationEffect(.degrees(-90))
+                    .animation(.easeInOut(duration: 0.12), value: progress)
+                    .position(center)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func directionChevron(dotPosition: CGPoint, ringCenter: CGPoint) -> some View {
+        let dx = dotPosition.x - ringCenter.x
+        let dy = dotPosition.y - ringCenter.y
+        let dist = hypot(dx, dy)
+
+        if dist > 58 {
+            let ux = dx / dist
+            let uy = dy / dist
+
+            Image(systemName: "chevron.right")
+                .font(.system(size: 24, weight: .heavy))
+                .foregroundColor(.white.opacity(0.85))
+                .rotationEffect(.degrees(Double(atan2(uy, ux)) * 180.0 / .pi))
+                .position(
+                    x: ringCenter.x + ux * 58,
+                    y: ringCenter.y + uy * 58
+                )
+                .shadow(color: .black.opacity(0.6), radius: 4)
+        }
+    }
+
+    // MARK: - Helpers
 
     private func startTimer() {
         timer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30.0, repeats: true) { _ in
@@ -369,118 +494,5 @@ struct GuidedCaptureView: View {
         if captureVM.nrPhotosTaken == 0 { onCancel() }
         else { showDiscardAlert = true }
     }
-
-    private func hintIcon(_ hint: String) -> String {
-        if hint.contains("right") { return "arrow.turn.right.up" }
-        if hint.contains("left")  { return "arrow.turn.left.up" }
-        if hint.contains("up")    { return "arrow.up" }
-        if hint.contains("down")  { return "arrow.down" }
-        if hint.contains("capture spot") || hint.contains("Move Back") { return "location.north.line.fill" }
-        if hint.contains("upright") || hint.contains("Tilted") { return "arrow.clockwise.circle.fill" }
-        if hint.contains("eye level") { return "eye.fill" }
-        if hint.contains("still") { return "hand.raised.fill" }
-        if hint.contains("tracking") || hint.contains("initialize") { return "scope" }
-        return "arrow.triangle.2.circlepath"
-    }
 }
 
-// MARK: - Projected Guide Dots
-
-/// Teleport-style guide dots:
-/// - Shot 1: fixed center circle + dot, eye-level gated.
-/// - Remaining shots: projected moving dots from AR target directions.
-private struct ProjectedGuideDotsOverlay: View {
-    let guideDots: [GuideDot]
-    let activeGuideTargetID: Int?
-    let progress: Double
-    let showCenterOnly: Bool
-    let isFirstShotEyeLevelValid: Bool
-    let isPositionWithinTolerance: Bool
-    let frameRect: CGRect
-
-    var body: some View {
-        GeometryReader { _ in
-            let center = CGPoint(x: frameRect.midX, y: frameRect.midY)
-            let centerReady = isFirstShotEyeLevelValid && isPositionWithinTolerance
-
-            ZStack {
-                if showCenterOnly {
-                    Circle()
-                        .stroke(Color.white.opacity(0.94), lineWidth: 5)
-                        .frame(width: 108, height: 108)
-                        .position(center)
-
-                    Circle()
-                        .fill(Color.green.opacity(centerReady ? 0.95 : 0.45))
-                        .frame(width: 42, height: 42)
-                        .overlay(Circle().stroke(Color.white.opacity(0.85), lineWidth: 2))
-                        .position(center)
-
-                    if centerReady {
-                        Circle()
-                            .trim(from: 0, to: max(0.02, progress))
-                            .stroke(Color.green, style: StrokeStyle(lineWidth: 7, lineCap: .round))
-                            .frame(width: 122, height: 122)
-                            .rotationEffect(.degrees(-90))
-                            .animation(.easeInOut(duration: 0.12), value: progress)
-                            .position(center)
-                    }
-                } else {
-                    // Fixed center reticle (dot moves into ring for capture).
-                    Circle()
-                        .stroke(Color.white.opacity(0.94), lineWidth: 5)
-                        .frame(width: 108, height: 108)
-                        .position(center)
-
-                    Circle()
-                        .trim(from: 0, to: max(0.02, progress))
-                        .stroke(Color.green, style: StrokeStyle(lineWidth: 6, lineCap: .round))
-                        .frame(width: 122, height: 122)
-                        .rotationEffect(.degrees(-90))
-                        .animation(.easeInOut(duration: 0.08), value: progress)
-                        .position(center)
-
-                    ForEach(guideDots) { dot in
-                        let absolute = absolutePoint(dot.screenPoint)
-                        Circle()
-                            .fill(Color.green.opacity(dot.isActive ? 0.98 : 0.72))
-                            .frame(width: dot.isActive ? 42 : 36, height: dot.isActive ? 42 : 36)
-                            .overlay(
-                                Circle()
-                                    .stroke(Color.white.opacity(dot.isActive ? 0.95 : 0.72),
-                                            lineWidth: dot.isActive ? 3 : 1.5)
-                            )
-                            .shadow(color: .black.opacity(0.35), radius: 5, x: 0, y: 2)
-                            .position(absolute)
-                            .animation(.easeInOut(duration: 0.12), value: absolute)
-                    }
-
-                    if let active = guideDots.first(where: { $0.id == activeGuideTargetID }) {
-                        let absolute = absolutePoint(active.screenPoint)
-                        let dx = absolute.x - center.x
-                        let dy = absolute.y - center.y
-                        let distance = max(0.001, hypot(dx, dy))
-                        let ux = dx / distance
-                        let uy = dy / distance
-
-                        if distance > 58 {
-                            Image(systemName: "chevron.right")
-                                .font(.system(size: 30, weight: .bold))
-                                .foregroundColor(.white)
-                                .rotationEffect(.degrees(atan2(uy, ux) * 180.0 / .pi))
-                                .position(
-                                    x: center.x + ux * 76,
-                                    y: center.y + uy * 76
-                                )
-                                .shadow(color: .black.opacity(0.35), radius: 4, x: 0, y: 2)
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    private func absolutePoint(_ point: CGPoint) -> CGPoint {
-        CGPoint(x: frameRect.minX + point.x, y: frameRect.minY + point.y)
-    }
-}

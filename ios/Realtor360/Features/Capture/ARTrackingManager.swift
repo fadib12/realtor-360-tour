@@ -1,7 +1,7 @@
 import ARKit
 import SceneKit
 import SwiftUI
-import AVFoundation
+@preconcurrency import AVFoundation
 import simd
 import UIKit
 
@@ -53,14 +53,38 @@ class ARTrackingManager: NSObject, ObservableObject {
     /// Angular velocity (degrees per second). Lower = more stable.
     @Published var angularVelocity: Double = 0
 
+    // ── Optical consistency gates ──────────────────────────────────────────
+    /// True when ARKit is using a wide-angle format for primary capture.
+    @Published private(set) var isWideLensActive: Bool = false
+    /// True when zoom factor remains at the required 1.0x.
+    @Published private(set) var isZoomValid: Bool = false
+    /// True when AR intrinsics/resolution stayed stable since start.
+    @Published private(set) var isFormatStable: Bool = false
+    /// True when focus/exposure are not currently adjusting.
+    @Published private(set) var isAutoFocusExposureSettled: Bool = false
+    /// Aggregate quality gate for deterministic spherical capture.
+    @Published private(set) var opticsReady: Bool = false
+    /// Portrait-mode horizontal FOV in radians, derived from camera intrinsics.
+    @Published private(set) var portraitHFOVRadians: Float = Float(70.0 * Double.pi / 180.0)
+    /// Portrait-mode vertical FOV in radians, derived from camera intrinsics.
+    @Published private(set) var portraitVFOVRadians: Float = Float(87.0 * Double.pi / 180.0)
+    /// Human-readable label for the selected camera lens.
+    @Published private(set) var selectedLensLabel: String = "—"
+    /// ARKit camera (wide) FOV — used for live sphere texture warping.
+    @Published private(set) var arkitPortraitHFOV: Float = Float(55.0 * Double.pi / 180.0)
+    @Published private(set) var arkitPortraitVFOV: Float = Float(73.0 * Double.pi / 180.0)
+
     enum TrackingQuality: Equatable {
         case normal
         case limited(reason: String)
         case notAvailable
 
         var isGoodForCapture: Bool {
-            if case .normal = self { return true }
-            return false
+            switch self {
+            case .normal: return true
+            case .limited(let reason): return reason != "Initializing"
+            case .notAvailable: return false
+            }
         }
 
         var displayLabel: String {
@@ -70,6 +94,12 @@ class ARTrackingManager: NSObject, ObservableObject {
             case .notAvailable:     return "Tracking: Unavailable"
             }
         }
+    }
+
+    struct ProjectedWorldPoint {
+        let point: CGPoint
+        let isInFront: Bool
+        let isOnScreen: Bool
     }
 
     // ── Current ARFrame (for projection) ────────────────────────────────────
@@ -85,6 +115,27 @@ class ARTrackingManager: NSObject, ObservableObject {
     private var previousForward: simd_float3?
     /// Previous frame's timestamp for angular velocity calculation.
     private var previousFrameTime: TimeInterval?
+    /// Whether camera exposure/focus/WB have been locked for consistent captures.
+    private(set) var cameraLocked = false
+    /// Device type of the AR video format selected when the session starts.
+    private var selectedCaptureDeviceType: AVCaptureDevice.DeviceType?
+    /// Lens type required for the whole scan once selected at session start.
+    private var requiredCaptureDeviceType: AVCaptureDevice.DeviceType?
+    /// Baseline camera image resolution for format stability enforcement.
+    private var expectedImageResolution: CGSize?
+    /// Baseline focal intrinsics for format stability checks.
+    private var expectedIntrinsics: simd_float3x3?
+
+    // ── Ultra-wide camera session (parallel to ARKit) ───────────────────────
+    /// AVCaptureSession using the ultra-wide camera for preview and capture.
+    /// ARKit continues running with the wide camera for pose tracking only.
+    private(set) var ultraWideSession: AVCaptureSession?
+    private var ultraWidePhotoOutput: AVCapturePhotoOutput?
+    private var ultraWideDevice: AVCaptureDevice?
+    private let ultraWideQueue = DispatchQueue(label: "com.realtor360.ultrawide")
+    private var photoCaptureDelegate: UltraWidePhotoCaptureDelegate?
+    /// True when the ultra-wide session is active (use preview layer instead of cameraImage).
+    @Published private(set) var hasUltraWideSession: Bool = false
 
     // ── HDR bracket configuration ───────────────────────────────────────────
     /// Settle time (ms) after adjusting exposure bias. Higher = more accurate
@@ -116,13 +167,35 @@ class ARTrackingManager: NSObject, ObservableObject {
         }
 
         let config = ARWorldTrackingConfiguration()
-        config.worldAlignment = .gravity  // Y = up; initial X/Z from device heading
+        config.worldAlignment = .gravity
 
-        // Highest resolution video format for quality captures
-        if let best = ARWorldTrackingConfiguration.supportedVideoFormats
-            .sorted(by: { $0.imageResolution.width > $1.imageResolution.width })
-            .first {
-            config.videoFormat = best
+        let formats = ARWorldTrackingConfiguration.supportedVideoFormats
+
+        print("[ARTrackingManager] Available ARKit video formats:")
+        for (i, f) in formats.enumerated() {
+            print("  [\(i)] \(f.captureDeviceType.rawValue) \(f.imageResolution.width)x\(f.imageResolution.height)")
+        }
+
+        let ultraWide = formats
+            .filter { $0.captureDeviceType == .builtInUltraWideCamera }
+            .sorted { $0.imageResolution.width > $1.imageResolution.width }
+
+        let wide = formats
+            .filter { $0.captureDeviceType == .builtInWideAngleCamera }
+            .sorted { $0.imageResolution.width > $1.imageResolution.width }
+
+        if let selected = ultraWide.first ?? wide.first ?? formats.first {
+            config.videoFormat = selected
+            selectedCaptureDeviceType = selected.captureDeviceType
+            requiredCaptureDeviceType = selected.captureDeviceType
+            selectedLensLabel = selected.captureDeviceType == .builtInUltraWideCamera
+                ? "Ultra Wide" : "Wide"
+            print("[ARTrackingManager] SELECTED: \(selected.captureDeviceType.rawValue) \(selected.imageResolution)")
+        } else {
+            selectedCaptureDeviceType = nil
+            requiredCaptureDeviceType = nil
+            selectedLensLabel = "Unknown"
+            print("[ARTrackingManager] No video format available")
         }
 
         session.delegate = self
@@ -130,13 +203,155 @@ class ARTrackingManager: NSObject, ObservableObject {
 
         // Cache AVCaptureDevice for HDR exposure bias + focus/WB control
         cameraDevice = ARWorldTrackingConfiguration.configurableCaptureDeviceForPrimaryCamera
+        cameraLocked = false
+        expectedImageResolution = nil
+        expectedIntrinsics = nil
 
         previousForward = nil
         previousFrameTime = nil
+
+        // Hard pin zoom to 1.0 for consistent optics.
+        if let device = cameraDevice {
+            do {
+                try device.lockForConfiguration()
+                let clamped = max(1.0, min(1.0, device.activeFormat.videoMaxZoomFactor))
+                device.videoZoomFactor = clamped
+                device.unlockForConfiguration()
+            } catch {
+                print("Failed to force zoom factor: \(error)")
+            }
+        }
+
+        isWideLensActive = true
+        isZoomValid = false
+        isFormatStable = false
+        isAutoFocusExposureSettled = false
+        opticsReady = false
+
+        // ── Start the ultra-wide camera session in parallel ─────────────
+        setupUltraWideSession()
+    }
+
+    /// Sets up a separate AVCaptureSession using the ultra-wide camera.
+    /// ARKit keeps the wide camera for tracking; the ultra-wide is free.
+    private func setupUltraWideSession() {
+        guard let device = AVCaptureDevice.default(
+            .builtInUltraWideCamera, for: .video, position: .back
+        ) else {
+            print("[ARTrackingManager] Ultra-wide camera not available on this device")
+            return
+        }
+
+        let avSession = AVCaptureSession()
+        avSession.sessionPreset = .photo
+
+        do {
+            let input = try AVCaptureDeviceInput(device: device)
+            guard avSession.canAddInput(input) else {
+                print("[ARTrackingManager] Cannot add ultra-wide input")
+                return
+            }
+            avSession.addInput(input)
+
+            let photoOutput = AVCapturePhotoOutput()
+            guard avSession.canAddOutput(photoOutput) else {
+                print("[ARTrackingManager] Cannot add photo output")
+                return
+            }
+            avSession.addOutput(photoOutput)
+
+            self.ultraWideDevice = device
+            self.ultraWidePhotoOutput = photoOutput
+            self.ultraWideSession = avSession
+            self.hasUltraWideSession = true
+
+            // Derive FOV from the ultra-wide camera's active format
+            let landscapeHFOVDeg = Double(device.activeFormat.videoFieldOfView)
+            let formatDesc = device.activeFormat.formatDescription
+            let dims = CMVideoFormatDescriptionGetDimensions(formatDesc)
+            let sensorW = Double(dims.width)
+            let sensorH = Double(dims.height)
+
+            if sensorW > 0 && sensorH > 0 && landscapeHFOVDeg > 0 {
+                let tanHalfLandH = tan(landscapeHFOVDeg / 2 * .pi / 180)
+                let landscapeVFOVRad = 2 * atan(tanHalfLandH * sensorH / sensorW)
+                // Portrait: rotate 90° → sensor H becomes screen W, sensor W becomes screen H
+                portraitHFOVRadians = Float(landscapeVFOVRad)
+                portraitVFOVRadians = Float(landscapeHFOVDeg * .pi / 180)
+                print("[ARTrackingManager] Ultra-wide FOV — portrait H: \(portraitHFOVRadians * 180 / .pi)° V: \(portraitVFOVRadians * 180 / .pi)°")
+            }
+
+            selectedLensLabel = "Ultra Wide"
+            print("[ARTrackingManager] Ultra-wide session configured: \(Int(sensorW))x\(Int(sensorH)) landscapeHFOV=\(landscapeHFOVDeg)°")
+
+            // Start on background thread (startRunning blocks)
+            ultraWideQueue.async { [weak avSession] in
+                avSession?.startRunning()
+            }
+        } catch {
+            print("[ARTrackingManager] Ultra-wide setup error: \(error)")
+        }
+    }
+
+    /// Lock exposure, focus, and white balance for consistent captures.
+    /// Call after the first successful capture so all subsequent photos
+    /// have matching color/brightness.
+    func lockCameraSettings() {
+        guard let device = cameraDevice, !cameraLocked else { return }
+        do {
+            try device.lockForConfiguration()
+            if device.isFocusModeSupported(.locked) {
+                device.focusMode = .locked
+            }
+            if device.isWhiteBalanceModeSupported(.locked) {
+                device.whiteBalanceMode = .locked
+            }
+            if device.isExposureModeSupported(.locked) {
+                device.exposureMode = .locked
+            }
+            device.unlockForConfiguration()
+            cameraLocked = true
+        } catch {
+            print("Failed to lock camera settings: \(error)")
+        }
+    }
+
+    /// Unlock camera settings (call on stop/reset).
+    func unlockCameraSettings() {
+        guard let device = cameraDevice, cameraLocked else { return }
+        do {
+            try device.lockForConfiguration()
+            if device.isFocusModeSupported(.continuousAutoFocus) {
+                device.focusMode = .continuousAutoFocus
+            }
+            if device.isWhiteBalanceModeSupported(.continuousAutoWhiteBalance) {
+                device.whiteBalanceMode = .continuousAutoWhiteBalance
+            }
+            if device.isExposureModeSupported(.continuousAutoExposure) {
+                device.exposureMode = .continuousAutoExposure
+            }
+            device.unlockForConfiguration()
+            cameraLocked = false
+        } catch {
+            print("Failed to unlock camera settings: \(error)")
+        }
     }
 
     func stop() {
+        unlockCameraSettings()
         session.pause()
+
+        // Stop ultra-wide session
+        if let uwSession = ultraWideSession {
+            let q = ultraWideQueue
+            q.async { uwSession.stopRunning() }
+        }
+        ultraWideSession = nil
+        ultraWidePhotoOutput = nil
+        ultraWideDevice = nil
+        hasUltraWideSession = false
+        photoCaptureDelegate = nil
+
         isAvailable = false
         currentFrame = nil
         cameraDevice = nil
@@ -144,6 +359,15 @@ class ARTrackingManager: NSObject, ObservableObject {
         previousFrameTime = nil
         trackingQuality = .notAvailable
         angularVelocity = 0
+        selectedCaptureDeviceType = nil
+        requiredCaptureDeviceType = nil
+        expectedImageResolution = nil
+        expectedIntrinsics = nil
+        isWideLensActive = false
+        isZoomValid = false
+        isFormatStable = false
+        isAutoFocusExposureSettled = false
+        opticsReady = false
     }
 
     // MARK: - Per-frame update (called at 30 fps by CaptureViewModel)
@@ -214,10 +438,72 @@ class ARTrackingManager: NSObject, ObservableObject {
         previousForward = forward
         previousFrameTime = now
 
-        // ── Live camera image from pixel buffer ─────────────────────────
+        // ── Live camera image from ARKit pixel buffer (always needed for sphere texture) ──
         let ci = CIImage(cvPixelBuffer: frame.capturedImage).oriented(.right)
         if let cg = ciContext.createCGImage(ci, from: ci.extent) {
             cameraImage = UIImage(cgImage: cg)
+        }
+
+        // ── Optical consistency gates ───────────────────────────────────
+        let resolution = frame.camera.imageResolution
+        let currentSize = CGSize(width: resolution.width, height: resolution.height)
+        if expectedImageResolution == nil {
+            expectedImageResolution = currentSize
+            expectedIntrinsics = frame.camera.intrinsics
+            isFormatStable = true
+
+            // Derive portrait FOV from intrinsics.
+            // Sensor is landscape (W>H). In portrait orientation:
+            //   portrait width  = sensor height → HFOV uses fy and sensor height
+            //   portrait height = sensor width  → VFOV uses fx and sensor width
+            let fx = frame.camera.intrinsics[0, 0]
+            let fy = frame.camera.intrinsics[1, 1]
+            let sensorW = Float(resolution.width)
+            let sensorH = Float(resolution.height)
+            if fy > 0 {
+                let hfov = 2 * atan(sensorH / (2 * fy))
+                arkitPortraitHFOV = hfov
+                if !hasUltraWideSession { portraitHFOVRadians = hfov }
+            }
+            if fx > 0 {
+                let vfov = 2 * atan(sensorW / (2 * fx))
+                arkitPortraitVFOV = vfov
+                if !hasUltraWideSession { portraitVFOVRadians = vfov }
+            }
+        } else if let expectedResolution = expectedImageResolution,
+                  let expectedIntrinsics = expectedIntrinsics {
+            let resolutionStable = abs(currentSize.width - expectedResolution.width) < 0.5
+                && abs(currentSize.height - expectedResolution.height) < 0.5
+
+            let intrinsics = frame.camera.intrinsics
+            let fxStable = abs(intrinsics[0, 0] - expectedIntrinsics[0, 0]) < 0.5
+            let fyStable = abs(intrinsics[1, 1] - expectedIntrinsics[1, 1]) < 0.5
+
+            isFormatStable = resolutionStable && fxStable && fyStable
+        } else {
+            isFormatStable = false
+        }
+
+        if let requiredCaptureDeviceType {
+            if let device = cameraDevice {
+                isWideLensActive = device.deviceType == requiredCaptureDeviceType
+            } else {
+                isWideLensActive = selectedCaptureDeviceType == requiredCaptureDeviceType
+            }
+        } else {
+            isWideLensActive = selectedCaptureDeviceType != nil
+        }
+
+        if let device = cameraDevice {
+            isZoomValid = abs(device.videoZoomFactor - 1.0) <= 0.01
+            isAutoFocusExposureSettled = !device.isAdjustingFocus && !device.isAdjustingExposure
+            opticsReady = isWideLensActive && isZoomValid && isFormatStable && isAutoFocusExposureSettled
+        } else {
+            // Some devices/configurations do not expose configurableCaptureDeviceForPrimaryCamera.
+            // In that case, enforce only the gates ARKit can reliably provide.
+            isZoomValid = true
+            isAutoFocusExposureSettled = true
+            opticsReady = isWideLensActive && isFormatStable
         }
 
         if !isAvailable { isAvailable = true }
@@ -235,44 +521,81 @@ class ARTrackingManager: NSObject, ObservableObject {
     ///   - viewportSize: Screen size in points (portrait).
     /// - Returns: Screen CGPoint, or nil if the direction is behind the camera.
     func projectToScreen(direction: simd_float3, viewportSize: CGSize) -> CGPoint? {
+        let worldPoint = cameraPosition + direction * 10.0
+        return projectWorldPoint(worldPoint, viewportSize: viewportSize)?.point
+    }
+
+    func projectWorldPoint(
+        _ worldPoint: simd_float3,
+        viewportSize: CGSize,
+        orientation: UIInterfaceOrientation = .portrait
+    ) -> ProjectedWorldPoint? {
         guard let frame = currentFrame else { return nil }
 
-        // Check if direction is in front of the camera (forward hemisphere)
-        let alignment = simd_dot(cameraForward, direction)
-        guard alignment > 0.0 else { return nil }
-
-        // Place a virtual point 10m away in the target direction from camera position
-        let worldPoint = cameraPosition + direction * 10.0
-
-        // ARCamera.projectPoint handles intrinsics + lens model + orientation
-        let screenPoint = frame.camera.projectPoint(
+        let projected = frame.camera.projectPoint(
             worldPoint,
-            orientation: .portrait,
+            orientation: orientation,
             viewportSize: viewportSize
         )
 
-        // No margin filtering — return raw position; the view model clamps to edges
-        return screenPoint
+        let screenPoint = CGPoint(x: CGFloat(projected.x), y: CGFloat(projected.y))
+        let delta = worldPoint - cameraPosition
+        let isInFront: Bool
+        if simd_length_squared(delta) < 1e-7 {
+            isInFront = true
+        } else {
+            isInFront = simd_dot(cameraForward, simd_normalize(delta)) > 0
+        }
+
+        let isOnScreen = screenPoint.x >= 0
+            && screenPoint.x <= viewportSize.width
+            && screenPoint.y >= 0
+            && screenPoint.y <= viewportSize.height
+
+        return ProjectedWorldPoint(
+            point: screenPoint,
+            isInFront: isInFront,
+            isOnScreen: isOnScreen
+        )
     }
 
-    // MARK: - Photo Capture from ARFrame
+    // MARK: - Photo Capture
 
-    /// Captures a high-resolution JPEG from the current ARFrame pixel buffer.
+    /// Captures a high-resolution JPEG. Prefers the ultra-wide AVCaptureSession
+    /// when available; falls back to ARFrame pixel buffer otherwise.
     func capturePhoto() async throws -> Data {
+        if let photoOutput = ultraWidePhotoOutput {
+            do {
+                return try await captureFromUltraWide(photoOutput)
+            } catch {
+                print("[ARTrackingManager] Ultra-wide capture failed: \(error), falling back to ARFrame")
+            }
+        }
+        return try captureFromARFrame()
+    }
+
+    private func captureFromARFrame() throws -> Data {
         guard let frame = session.currentFrame else {
             throw ARCaptureError.noFrame
         }
-
         let ciImage = CIImage(cvPixelBuffer: frame.capturedImage).oriented(.right)
         guard let cgImage = ciContext.createCGImage(ciImage, from: ciImage.extent) else {
             throw ARCaptureError.conversionFailed
         }
-
-        // High quality JPEG — this is source material for stitching
         guard let data = UIImage(cgImage: cgImage).jpegData(compressionQuality: 0.95) else {
             throw ARCaptureError.encodingFailed
         }
         return data
+    }
+
+    private func captureFromUltraWide(_ photoOutput: AVCapturePhotoOutput) async throws -> Data {
+        return try await withCheckedThrowingContinuation { continuation in
+            let settings = AVCapturePhotoSettings()
+            settings.flashMode = .off
+            let delegate = UltraWidePhotoCaptureDelegate(continuation: continuation)
+            self.photoCaptureDelegate = delegate
+            photoOutput.capturePhoto(with: settings, delegate: delegate)
+        }
     }
 
     // MARK: - HDR Bracket Capture (Professional-Grade)
@@ -389,25 +712,73 @@ enum ARCaptureError: LocalizedError {
     }
 }
 
-// MARK: - Live Camera Image (from ARFrame pixel buffer)
+// MARK: - Ultra-Wide Camera Preview (AVCaptureVideoPreviewLayer)
 
-/// Displays the live camera feed as a UIImage inside a UIImageView.
-/// Unlike ARSCNView, this is **transparent** — the SceneKit globe behind
-/// it remains fully visible. The image is extracted from the current
-/// ARFrame's capturedImage pixel buffer at 30 fps.
+/// Hardware-accelerated live preview from the ultra-wide AVCaptureSession.
+/// Uses AVCaptureVideoPreviewLayer for zero-copy GPU rendering.
+struct UltraWideCameraPreview: UIViewRepresentable {
+    let session: AVCaptureSession
+
+    func makeUIView(context: Context) -> UltraWidePreviewUIView {
+        let view = UltraWidePreviewUIView()
+        view.previewLayer.session = session
+        view.previewLayer.videoGravity = .resizeAspectFill
+        view.backgroundColor = .clear
+        return view
+    }
+
+    func updateUIView(_ uiView: UltraWidePreviewUIView, context: Context) {
+        uiView.previewLayer.session = session
+    }
+
+    class UltraWidePreviewUIView: UIView {
+        override class var layerClass: AnyClass { AVCaptureVideoPreviewLayer.self }
+        var previewLayer: AVCaptureVideoPreviewLayer { layer as! AVCaptureVideoPreviewLayer }
+    }
+}
+
+// MARK: - Fallback Camera Feed (from ARFrame pixel buffer)
+
 struct CameraFeedView: UIViewRepresentable {
     let image: UIImage?
 
     func makeUIView(context: Context) -> UIImageView {
         let iv = UIImageView()
-        // Fill the framed guide area like the reference capture flow.
-        iv.contentMode = .scaleAspectFill
+        iv.contentMode = .scaleAspectFit
         iv.clipsToBounds = true
-        iv.backgroundColor = .black
+        iv.backgroundColor = .clear
         return iv
     }
 
     func updateUIView(_ uiView: UIImageView, context: Context) {
         uiView.image = image
+    }
+}
+
+// MARK: - Ultra-Wide Photo Capture Delegate
+
+/// Bridges AVCapturePhotoOutput's delegate callback to async/await.
+class UltraWidePhotoCaptureDelegate: NSObject, AVCapturePhotoCaptureDelegate {
+    private let continuation: CheckedContinuation<Data, Error>
+
+    init(continuation: CheckedContinuation<Data, Error>) {
+        self.continuation = continuation
+        super.init()
+    }
+
+    func photoOutput(
+        _ output: AVCapturePhotoOutput,
+        didFinishProcessingPhoto photo: AVCapturePhoto,
+        error: Error?
+    ) {
+        if let error {
+            continuation.resume(throwing: error)
+            return
+        }
+        guard let data = photo.fileDataRepresentation() else {
+            continuation.resume(throwing: ARCaptureError.encodingFailed)
+            return
+        }
+        continuation.resume(returning: data)
     }
 }
